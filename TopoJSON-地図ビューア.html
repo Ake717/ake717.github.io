@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+  <meta charset="UTF-8">
+  <title>TopoJSON Viewer</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/topojson-client@3"></script>
+  <script src="https://unpkg.com/simplify-js@1.2.4/simplify.js"></script>
+  <style>
+    html,
+    body,
+    #map {
+      height: 100%;
+      margin: 0;
+    }
+
+    .ctrl {
+      position: fixed;
+      z-index: 1000;
+      background: rgba(255, 255, 255, 0.9);
+      padding: 8px;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+
+    #main {
+      top: 10px;
+      left: 10px;
+      width: 450px;
+    }
+
+    #kml {
+      top: 10px;
+      right: 10px;
+      width: 180px;
+    }
+
+    input,
+    button,
+    select {
+      margin: 2px;
+      padding: 4px;
+      font-size: 12px;
+    }
+
+    input[type="color"] {
+      width: 25px;
+      height: 25px;
+      padding: 0;
+    }
+
+    .url-row {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      margin: 2px 0;
+    }
+
+    .url-row input[type="text"] {
+      flex: 1;
+    }
+
+    .selected {
+      stroke: #f00 !important;
+      stroke-width: 3px !important;
+      fill-opacity: 0 !important;
+    }
+
+    .msg {
+      color: #666;
+      font-size: 11px;
+    }
+
+    .error {
+      color: #d00;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="main" class="ctrl">
+    <div><button onclick="loadAll()">Load</button> <button onclick="clearAll()">Clear</button> <button
+        onclick="share()">Copy</button> <a href="https://geoshape.ex.nii.ac.jp/ka/resource/" target="_blank"
+        class="geo-link">Geo Data</a></div>
+    <div id="urls"></div>
+    <div>Search: <input id="search" placeholder="Address"> <button onclick="search()">Go</button></div>
+    <div id="msg" class="msg"></div>
+  </div>
+
+  <div id="kml" class="ctrl">
+    <label><input type="checkbox" id="kmlMode"> KML Mode</label><br>
+    <label><input type="checkbox" id="simplify"> Simplify</label>
+    <input type="number" id="tolerance" value="0.0001" step="0.0001" style="width:70px"><br>
+    <input id="title" placeholder="Title" style="width:120px"><br>
+    <button onclick="exportKml()">Export KML</button>
+  </div>
+
+  <button id="toggleUI" style="position:fixed; top:10px; right:210px; z-index:1001; padding:4px 8px; font-size:12px;"
+    onclick="toggleUI()">Hide UI</button>
+
+  <div id="map"></div>
+
+  <script>
+    const map = L.map('map', { zoomControl: false }).setView([36.2, 138.3], 5);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '<a href="https://www.openstreetmap.org/about/">(C)OpenStreetMap</a>'
+    }).addTo(map);
+
+    let layers = [], features = [], selected = new Set(), marker = null;
+    const cache = new Map();
+
+    const kanjiMap = { '零': 0, '〇': 0, '一': 1, '壱': 1, '二': 2, '弐': 2, '三': 3, '参': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9, '十': 10, '拾': 10, '百': 100, '千': 1000, '万': 10000 };
+    const convertKanji = s => s.replace(/[〇零一壱二弐三参四五六七八九十拾百千万]+/g, m => {
+      let v = 0, n = 0;
+      for (const c of m) {
+        if (kanjiMap[c] >= 10) v += (n || 1) * kanjiMap[c], n = 0;
+        else n = kanjiMap[c];
+      }
+      return v + n;
+    });
+
+    function addUrl(url = '', color = '') {
+      const div = document.createElement('div');
+      div.className = 'url-row';
+      div.innerHTML = `<button onclick="addUrl()">+</button><input type="text" value="${url}" placeholder="TopoJSON URL" onchange="updateUrl()">
+                       <input type="color" value="${color || randomColor()}" onchange="updateUrl()">
+                       <button onclick="this.parentElement.remove();updateUrl()">-</button>`;
+      document.getElementById('urls').appendChild(div);
+      updateUrl();
+    }
+
+    function randomColor() {
+      return '#' + Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0');
+    }
+
+    function getUrls() {
+      return Array.from(document.querySelectorAll('.url-row')).map(row => ({
+        url: row.querySelector('input[type="text"]').value.trim(),
+        color: row.querySelector('input[type="color"]').value
+      })).filter(x => x.url);
+    }
+
+    function updateUrl() {
+      const urls = getUrls();
+      const params = new URLSearchParams(location.search);
+      if (urls.length) params.set('urls', encodeURIComponent(JSON.stringify(urls)));
+      else params.delete('urls');
+      history.replaceState({}, '', params.toString() ? `?${params}` : location.pathname);
+    }
+
+    function loadState() {
+      const params = new URLSearchParams(location.search);
+      const urlsParam = params.get('urls');
+      if (urlsParam) try {
+        const urls = JSON.parse(decodeURIComponent(urlsParam));
+        urls.forEach(u => addUrl(u.url, u.color));
+        setTimeout(loadAll, 100);
+      } catch (e) { }
+      if (!document.querySelector('.url-row')) addUrl();
+    }
+
+    async function loadAll() {
+      if (document.getElementById('kmlMode').checked && selected.size > 0) {
+        if (!confirm('KMLモードが有効です。\nLoadを実行すると選択がリセットされます。続行しますか？')) {
+          return;
+        }
+      }
+
+      const urls = getUrls();
+      if (!urls.length) return msg('No URLs');
+
+      msg('Loading...');
+      clear(false);
+
+      for (const { url, color } of urls) {
+        try {
+          const res = await fetch(url);
+          const topo = await res.json();
+          const key = Object.keys(topo.objects)[0];
+          let geo = topojson.feature(topo, topo.objects[key]);
+
+          if (document.getElementById('simplify').checked) {
+            const tol = +document.getElementById('tolerance').value;
+            geo = simplifyGeo(geo, tol);
+          }
+
+          const layer = L.geoJSON(geo, {
+            style: { color, weight: 1, opacity: 0.7, fillOpacity: 0.2 },
+            onEachFeature: (feature, lyr) => {
+              const name = getName(feature);
+              lyr.bindPopup(name);
+              features.push({ feature, layer: lyr, color, name });
+              lyr.on('click', e => {
+                if (!document.getElementById('kmlMode').checked) return;
+                if (!(e.originalEvent.ctrlKey || e.originalEvent.metaKey)) return;
+                L.DomEvent.stopPropagation(e);
+                toggleSelect(lyr);
+              });
+            }
+          }).addTo(map);
+          layers.push(layer);
+        } catch (e) {
+          console.error(e);
+          msg('Load error: ' + url, true);
+        }
+      }
+
+      if (layers.length) {
+        const group = new L.featureGroup(layers.flatMap(l => l.getLayers()));
+        map.fitBounds(group.getBounds());
+      }
+      msg('Ready');
+    }
+
+    function getName(feature) {
+      const p = feature.properties || {};
+      const raw = p.name || p.S_NAME || p.N03_004 || 'Feature';
+      return convertKanji(raw);
+    }
+
+    function simplifyGeo(geo, tol) {
+      const simpRing = ring => simplify(ring.map(([x, y]) => ({ x, y })), tol, true).map(p => [p.x, p.y]);
+      const simpGeom = g => {
+        if (g.type === 'Polygon') return { ...g, coordinates: g.coordinates.map(simpRing) };
+        if (g.type === 'MultiPolygon') return { ...g, coordinates: g.coordinates.map(poly => poly.map(simpRing)) };
+        return g;
+      };
+      return { ...geo, features: geo.features.map(f => ({ ...f, geometry: simpGeom(f.geometry) })) };
+    }
+
+    function toggleSelect(layer) {
+      if (selected.has(layer)) {
+        selected.delete(layer);
+        layer.getElement().classList.remove('selected');
+      } else {
+        selected.add(layer);
+        layer.getElement().classList.add('selected');
+      }
+    }
+
+    function clear(clearUrls = true) {
+      layers.forEach(l => map.removeLayer(l));
+      layers = [];
+      features = [];
+      selected.clear();
+      if (marker) map.removeLayer(marker), marker = null;
+      if (clearUrls) {
+        document.getElementById('urls').innerHTML = '';
+        addUrl();
+        updateUrl();
+      }
+      msg('');
+    }
+
+    function clearAll() {
+      if (confirm('すべてのデータをクリアします。よろしいですか？')) {
+        clear(true);
+      }
+    }
+
+    function resetSelection() {
+      selected.forEach(l => l.getElement()?.classList.remove('selected'));
+      selected.clear();
+    }
+
+    function toggleUI() {
+      const main = document.getElementById('main');
+      const kml = document.getElementById('kml');
+      const btn = document.getElementById('toggleUI');
+      const isHidden = main.style.display === 'none';
+
+      main.style.display = isHidden ? 'block' : 'none';
+      kml.style.display = isHidden ? 'block' : 'none';
+      btn.textContent = isHidden ? 'Hide UI' : 'Show UI';
+    }
+
+    async function search() {
+      const q = document.getElementById('search').value.trim();
+      if (!q) return;
+
+      try {
+        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=1`);
+        const data = await res.json();
+        if (!data.length) return msg('Not found');
+
+        const { lat, lon, display_name } = data[0];
+        if (marker) map.removeLayer(marker);
+        marker = L.marker([lat, lon]).addTo(map).bindPopup(display_name).openPopup();
+        map.setView([lat, lon], 17);
+        msg('Found');
+      } catch (e) {
+        msg('Search error', true);
+      }
+    }
+
+    function exportKml() {
+      if (!selected.size) return;
+
+      let kml = '<?xml version="1.0" encoding="UTF-8"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document>';
+
+      selected.forEach(layer => {
+        const feature = features.find(f => f.layer === layer)?.feature;
+        if (!feature) return;
+
+        const name = getName(feature);
+        const geom = feature.geometry;
+
+        const coords2kml = coords => coords.map(c => `${c[0]},${c[1]},0`).join(' ');
+        const makePoly = (exterior, holes = []) => {
+          let p = `<Polygon><outerBoundaryIs><LinearRing><coordinates>${coords2kml(exterior)}</coordinates></LinearRing></outerBoundaryIs>`;
+          holes.forEach(h => p += `<innerBoundaryIs><LinearRing><coordinates>${coords2kml(h)}</coordinates></LinearRing></innerBoundaryIs>`);
+          return p + '</Polygon>';
+        };
+
+        kml += `<Placemark><name>${name.replace(/[<>&'"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' }[c]))}</name>`;
+
+        if (geom.type === 'Polygon') {
+          kml += makePoly(geom.coordinates[0], geom.coordinates.slice(1));
+        } else if (geom.type === 'MultiPolygon') {
+          geom.coordinates.forEach(poly => kml += makePoly(poly[0], poly.slice(1)));
+        }
+
+        kml += '</Placemark>';
+      });
+
+      kml += '</Document></kml>';
+
+      const blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = (document.getElementById('title').value || 'features') + '.kml';
+      a.click();
+    }
+
+    function share() {
+      updateUrl();
+      navigator.clipboard?.writeText(location.href).then(() => msg('URL copied')).catch(() => msg('Copy failed', true));
+    }
+
+    function msg(text, error = false) {
+      const el = document.getElementById('msg');
+      el.textContent = text;
+      el.className = `msg${error ? ' error' : ''}`;
+    }
+
+    document.getElementById('search').addEventListener('keypress', e => e.key === 'Enter' && search());
+    document.getElementById('title').addEventListener('input', () => document.title = document.getElementById('title').value || 'TopoJSON Viewer');
+    loadState();
+  </script>
+</body>
+
+</html>
