@@ -19,7 +19,7 @@
     .ctrl {
       position: fixed;
       z-index: 1000;
-      background: rgba(255, 255, 255, 0.9);
+      background: rgba(255, 255, 255, 0.6);
       padding: 8px;
       border-radius: 4px;
       font-size: 13px;
@@ -76,236 +76,445 @@
     .error {
       color: #d00;
     }
+
+    .address-label {
+      white-space: nowrap;
+      font-weight: bolder;
+    }
+
+    .address-label div {
+      transform-origin: 0% 50%;
+      background-color: rgba(255, 255, 255, 0.7);
+      border: 0.1px solid #cccccca4;
+      border-radius: 2px;
+      padding: 0.1px 0.3px;
+      color: #333;
+      transition: font-size 0.1s ease;
+    }
   </style>
 </head>
 
 <body>
   <div id="main" class="ctrl">
-    <div><button onclick="loadAll()">Load</button> <button onclick="clearAll()">Clear</button> <button
-        onclick="share()">Copy</button> <a href="https://geoshape.ex.nii.ac.jp/ka/resource/" target="_blank"
-        class="geo-link">Geo Data</a></div>
+    <div>
+      <button id="loadBtn">Load</button>
+      <button id="clearBtn">Clear</button>
+      <button id="shareBtn">Copy</button>
+      <a href="https://geoshape.ex.nii.ac.jp/ka/resource/" target="_blank">Geo Data</a>
+    </div>
     <div id="urls"></div>
-    <div>Search: <input id="search" placeholder="Address"> <button onclick="search()">Go</button></div>
+    <div>Search: <input id="search" placeholder="Address"> <button id="searchBtn">Go</button></div>
     <div id="msg" class="msg"></div>
   </div>
 
   <div id="kml" class="ctrl">
     <label><input type="checkbox" id="kmlMode"> KML Mode</label><br>
+    <label><input type="checkbox" id="showAddress"> Show Address</label><br>
     <label><input type="checkbox" id="simplify"> Simplify</label>
     <input type="number" id="tolerance" value="0.0001" step="0.0001" style="width:70px"><br>
     <input id="title" placeholder="Title" style="width:120px"><br>
-    <button onclick="exportKml()">Export KML</button>
+    <button id="exportKmlBtn">Export KML</button>
   </div>
 
-  <button id="toggleUI" style="position:fixed; top:10px; right:210px; z-index:1001; padding:4px 8px; font-size:12px;"
-    onclick="toggleUI()">Hide UI</button>
+  <button id="toggleUI"
+    style="position:fixed; top:10px; right:210px; z-index:1001; padding:4px 8px; font-size:12px;">Hide UI</button>
 
   <div id="map"></div>
 
   <script>
-    const map = L.map('map', { zoomControl: false }).setView([36.2, 138.3], 5);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '<a href="https://www.openstreetmap.org/about/">(C)OpenStreetMap</a>'
-    }).addTo(map);
+    (function () {
+      'use strict';
 
-    let layers = [], features = [], selected = new Set(), marker = null;
-    const cache = new Map();
+      // --- 定数定義 ---
+      const INITIAL_VIEW = { center: [36.2, 138.3], zoom: 5 };
+      const TILE_LAYER_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+      const TILE_LAYER_ATTRIBUTION = '<a href="https://www.openstreetmap.org/about/">(C)OpenStreetMap</a>';
+      const KANJI_MAP = { '零': 0, '〇': 0, '一': 1, '壱': 1, '二': 2, '弐': 2, '三': 3, '参': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9, '十': 10, '拾': 10, '百': 100, '千': 1000, '万': 10000 };
 
-    const kanjiMap = { '零': 0, '〇': 0, '一': 1, '壱': 1, '二': 2, '弐': 2, '三': 3, '参': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9, '十': 10, '拾': 10, '百': 100, '千': 1000, '万': 10000 };
-    const convertKanji = s => s.replace(/[〇零一壱二弐三参四五六七八九十拾百千万]+/g, m => {
-      let v = 0, n = 0;
-      for (const c of m) {
-        if (kanjiMap[c] >= 10) v += (n || 1) * kanjiMap[c], n = 0;
-        else n = kanjiMap[c];
+      // --- DOM要素のキャッシュ ---
+      const dom = {
+        mapContainer: document.getElementById('map'),
+        urlsContainer: document.getElementById('urls'),
+        msgEl: document.getElementById('msg'),
+        mainCtrl: document.getElementById('main'),
+        kmlCtrl: document.getElementById('kml'),
+        loadBtn: document.getElementById('loadBtn'),
+        clearBtn: document.getElementById('clearBtn'),
+        shareBtn: document.getElementById('shareBtn'),
+        searchBtn: document.getElementById('searchBtn'),
+        searchInput: document.getElementById('search'),
+        exportKmlBtn: document.getElementById('exportKmlBtn'),
+        kmlModeCheck: document.getElementById('kmlMode'),
+        showAddressCheck: document.getElementById('showAddress'),
+        simplifyCheck: document.getElementById('simplify'),
+        toleranceInput: document.getElementById('tolerance'),
+        titleInput: document.getElementById('title'),
+        toggleUIBtn: document.getElementById('toggleUI'),
+      };
+
+      // --- アプリケーションの状態管理 ---
+      const state = {
+        map: null,
+        layers: [],
+        featureData: new Map(),
+        selectedLayers: new Set(),
+        marker: null,
+        addressLabels: new Map(),
+        hiddenAddressLabels: new Map(), // New property to store hidden labels temporarily
+        currentHoverLabel: null,
+        isCtrlPressed: false,
+        currentHoverLayer: null
+      };
+
+      // --- ヘルパー関数 ---
+      const randomColor = () => '#' + Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0');
+      const convertKanji = s => s.replace(/[〇零一壱二弐三参四五六七八九十拾百千万]+/g, m => {
+        let v = 0, n = 0;
+        for (const c of m) {
+          if (KANJI_MAP[c] >= 10) { v += (n || 1) * KANJI_MAP[c]; n = 0; }
+          else { n = KANJI_MAP[c]; }
+        }
+        return v + n;
+      });
+      const getFontSizeForZoom = (zoom) => Math.max(2, Math.min(18, 3 + 14 * Math.pow(Math.max(0, Math.min(1, (zoom - 2) / 16)), 2)));
+
+      const escapeXml = str => str.replace(/[<>&'"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' }[c]));
+      const showMessage = (text, isError = false) => {
+        dom.msgEl.textContent = text;
+        dom.msgEl.className = `msg${isError ? ' error' : ''}`;
+      };
+
+      // --- ラベル表示関連 ---
+      const createLabelIcon = (name, fontSize) => L.divIcon({
+        className: 'address-label',
+        html: `<div style="font-size: ${fontSize}px;">${name}</div>`,
+        iconSize: [null, null],
+        iconAnchor: [25, 25]
+      });
+
+      const showAddressLabel = (layer) => {
+        const layerId = L.Util.stamp(layer);
+        const data = state.featureData.get(layerId);
+        if (!data) return;
+
+        let center = getFeatureLabelPosition(data.feature) || layer.getBounds().getCenter();
+        const fontSize = getFontSizeForZoom(state.map.getZoom());
+        const labelMarker = L.marker(center, { icon: createLabelIcon(data.name, fontSize) }).addTo(state.map);
+        state.addressLabels.set(layerId, labelMarker);
+        updateLabelRotations();
+      };
+
+      const hideAddressLabel = (layer) => {
+        const layerId = L.Util.stamp(layer);
+        const labelMarker = state.addressLabels.get(layerId);
+        if (labelMarker) {
+          state.map.removeLayer(labelMarker);
+          state.addressLabels.delete(layerId);
+        }
+      };
+
+      const toggleAddressDisplay = () => {
+        if (dom.showAddressCheck.checked) {
+          state.selectedLayers.forEach(layer => showAddressLabel(layer));
+        } else {
+          state.addressLabels.forEach(labelMarker => state.map.removeLayer(labelMarker));
+          state.addressLabels.clear();
+        }
+      };
+
+      const showHoverAddressLabel = (layer) => {
+        hideHoverAddressLabel();
+        const data = state.featureData.get(L.Util.stamp(layer));
+        if (!data) return;
+
+        const address = data.name;
+        if (!address) return;
+
+        const center = getFeatureLabelPosition(data.feature) || layer.getBounds().getCenter();
+        const fontSize = getFontSizeForZoom(state.map.getZoom());
+        state.currentHoverLabel = L.marker(center, { icon: createLabelIcon(address, fontSize) }).addTo(state.map);
+        updateLabelRotations();
+      };
+
+      const hideHoverAddressLabel = () => {
+        if (state.currentHoverLabel) {
+          state.map.removeLayer(state.currentHoverLabel);
+          state.currentHoverLabel = null;
+        }
+      };
+
+      function updateLabelRotations() {
+        const labels = [...state.addressLabels.values(), ...state.currentHoverLabel ? [state.currentHoverLabel] : []];
+        const fontSize = getFontSizeForZoom(state.map.getZoom());
+
+        labels.forEach((markerA, i) => {
+          const aPixel = state.map.latLngToContainerPoint(markerA.getLatLng());
+          let maxAngle = 0;
+
+          labels.forEach((markerB, j) => {
+            if (i === j) return;
+            const bPixel = state.map.latLngToContainerPoint(markerB.getLatLng());
+            const dx = aPixel.x - bPixel.x;
+            const dy = aPixel.y - bPixel.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            if (dist < 100) {
+              const angle = 30 * (100 - dist) / 100;
+              if (Math.abs(angle) > Math.abs(maxAngle)) maxAngle = angle;
+            }
+          });
+          const div = markerA.getElement()?.querySelector('div');
+          if (div) {
+            div.style.transform = `rotate(${maxAngle}deg)`;
+            div.style.fontSize = `${fontSize}px`;
+          }
+        });
       }
-      return v + n;
-    });
 
-    function addUrl(url = '', color = '') {
-      const div = document.createElement('div');
-      div.className = 'url-row';
-      div.innerHTML = `<button onclick="addUrl()">+</button><input type="text" value="${url}" placeholder="TopoJSON URL" onchange="updateUrl()">
-                       <input type="color" value="${color || randomColor()}" onchange="updateUrl()">
-                       <button onclick="this.parentElement.remove();updateUrl()">-</button>`;
-      document.getElementById('urls').appendChild(div);
-      updateUrl();
-    }
-
-    function randomColor() {
-      return '#' + Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0');
-    }
-
-    function getUrls() {
-      return Array.from(document.querySelectorAll('.url-row')).map(row => ({
+      // --- URL & UI ---
+      const getUrls = () => Array.from(dom.urlsContainer.querySelectorAll('.url-row')).map(row => ({
         url: row.querySelector('input[type="text"]').value.trim(),
         color: row.querySelector('input[type="color"]').value
       })).filter(x => x.url);
-    }
 
-    function updateUrl() {
-      const urls = getUrls();
-      const params = new URLSearchParams(location.search);
-      if (urls.length) params.set('urls', encodeURIComponent(JSON.stringify(urls)));
-      else params.delete('urls');
-      history.replaceState({}, '', params.toString() ? `?${params}` : location.pathname);
-    }
+      const updateUrlParams = () => {
+        const urls = getUrls();
+        const params = new URLSearchParams(location.search);
+        if (urls.length) params.set('urls', encodeURIComponent(JSON.stringify(urls)));
+        else params.delete('urls');
+        history.replaceState({}, '', params.toString() ? `?${params}` : location.pathname);
+      };
 
-    function loadState() {
-      const params = new URLSearchParams(location.search);
-      const urlsParam = params.get('urls');
-      if (urlsParam) try {
-        const urls = JSON.parse(decodeURIComponent(urlsParam));
-        urls.forEach(u => addUrl(u.url, u.color));
-        setTimeout(loadAll, 100);
-      } catch (e) { }
-      if (!document.querySelector('.url-row')) addUrl();
-    }
+      function addUrlRow(url = '', color = '') {
+        const row = document.createElement('div');
+        row.className = 'url-row';
+        row.innerHTML = `<button class="add">+</button><input type="text" value="${url}" placeholder="TopoJSON URL">
+                     <input type="color" value="${color || randomColor()}">
+                     <button class="remove">-</button>`;
 
-    async function loadAll() {
-      if (document.getElementById('kmlMode').checked && selected.size > 0) {
-        if (!confirm('KMLモードが有効です。\nLoadを実行すると選択がリセットされます。続行しますか？')) {
-          return;
-        }
+        row.querySelector('.add').addEventListener('click', () => addUrlRow());
+        row.querySelector('.remove').addEventListener('click', () => {
+          row.remove();
+          updateUrlParams();
+        });
+        row.querySelector('input[type="text"]').addEventListener('change', updateUrlParams);
+        row.querySelector('input[type="color"]').addEventListener('change', updateUrlParams);
+
+        dom.urlsContainer.appendChild(row);
+        updateUrlParams();
       }
 
-      const urls = getUrls();
-      if (!urls.length) return msg('No URLs');
+      const shareUrl = () => {
+        updateUrlParams();
+        navigator.clipboard?.writeText(location.href)
+          .then(() => showMessage('URL copied'))
+          .catch(() => showMessage('Copy failed', true));
+      };
 
-      msg('Loading...');
-      clear(false);
+      const toggleUI = () => {
+        const isHidden = dom.mainCtrl.style.display === 'none';
+        const display = isHidden ? 'block' : 'none';
+        dom.mainCtrl.style.display = display;
+        dom.kmlCtrl.style.display = display;
+        dom.toggleUIBtn.textContent = isHidden ? 'Hide UI' : 'Show UI';
+      };
 
-      for (const { url, color } of urls) {
-        try {
-          const res = await fetch(url);
-          const topo = await res.json();
-          const key = Object.keys(topo.objects)[0];
-          let geo = topojson.feature(topo, topo.objects[key]);
+      // --- データ読み込み & 処理 ---
+      async function loadAll() {
+        if (dom.kmlModeCheck.checked && state.selectedLayers.size > 0) {
+          if (!confirm('KMLモードが有効です。\nLoadを実行すると選択がリセットされます。続行しますか？')) return;
+        }
+        const urls = getUrls();
+        if (!urls.length) return showMessage('No URLs');
 
-          if (document.getElementById('simplify').checked) {
-            const tol = +document.getElementById('tolerance').value;
-            geo = simplifyGeo(geo, tol);
+        showMessage('Loading...');
+        clearMap(false);
+
+        for (const { url, color } of urls) {
+          try {
+            const res = await fetch(url);
+            if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+            const topo = await res.json();
+            const key = Object.keys(topo.objects)[0];
+            let geo = topojson.feature(topo, topo.objects[key]);
+
+            if (dom.simplifyCheck.checked) {
+              geo = simplifyGeo(geo, +dom.toleranceInput.value);
+            }
+
+            const layerGroup = L.geoJSON(geo, {
+              style: { color, weight: 1, opacity: 0.7, fillOpacity: 0.2 },
+              onEachFeature: (feature, layer) => setupFeatureEvents(feature, layer, color)
+            }).addTo(state.map);
+            state.layers.push(layerGroup);
+          } catch (e) {
+            console.error(e);
+            showMessage('Load error: ' + url, true);
           }
+        }
 
-          const layer = L.geoJSON(geo, {
-            style: { color, weight: 1, opacity: 0.7, fillOpacity: 0.2 },
-            onEachFeature: (feature, lyr) => {
-              const name = getName(feature);
-              lyr.bindPopup(name);
-              features.push({ feature, layer: lyr, color, name });
-              lyr.on('click', e => {
-                if (!document.getElementById('kmlMode').checked) return;
-                if (!(e.originalEvent.ctrlKey || e.originalEvent.metaKey)) return;
-                L.DomEvent.stopPropagation(e);
-                toggleSelect(lyr);
+        if (state.layers.length) {
+          const group = new L.featureGroup(state.layers.flatMap(l => l.getLayers()));
+          if (group.getLayers().length > 0) {
+            state.map.fitBounds(group.getBounds());
+          }
+        }
+        showMessage('Ready');
+      }
+
+      function setupFeatureEvents(feature, layer, color) {
+        const layerId = L.Util.stamp(layer);
+        const name = getName(feature);
+        state.featureData.set(layerId, { feature, layer, color, name });
+
+        layer.on('click', e => {
+          if (dom.kmlModeCheck.checked && (e.originalEvent.ctrlKey || e.originalEvent.metaKey)) {
+            L.DomEvent.stopPropagation(e);
+            toggleSelect(layer);
+          }
+        });
+
+        layer.on('mouseover', (e) => {
+          // console.log('mouseover event:', { ctrlKey: e.originalEvent.ctrlKey, metaKey: e.originalEvent.metaKey });
+          state.currentHoverLayer = layer; // ホバー中のレイヤーを記録
+          if (!state.isCtrlPressed) { // Ctrl/Commandが押されていない場合のみ表示
+            showHoverAddressLabel(layer);
+          }
+          if (!state.selectedLayers.has(layer)) {
+            layer.setStyle({ fillOpacity: 0.4 });
+          }
+        });
+
+        layer.on('mouseout', () => {
+          hideHoverAddressLabel();
+          state.currentHoverLayer = null; // ホバーが終了したらリセット
+          if (!state.selectedLayers.has(layer)) {
+            layer.setStyle({ fillOpacity: 0.2 });
+          }
+        });
+      }
+
+      // グローバルキーイベントリスナー
+      function setupKeyEvents() {
+        document.addEventListener('keydown', (e) => {
+          if (e.ctrlKey || e.metaKey) {
+            if (!state.isCtrlPressed) {
+              state.isCtrlPressed = true;
+              // Hide hover label
+              hideHoverAddressLabel();
+              // Hide fixed address labels and store them
+              state.addressLabels.forEach((labelMarker, layerId) => {
+                state.map.removeLayer(labelMarker);
+                state.hiddenAddressLabels.set(layerId, labelMarker);
+              });
+              state.addressLabels.clear();
+            }
+          }
+        });
+
+        document.addEventListener('keyup', (e) => {
+          if (!e.ctrlKey && !e.metaKey && state.isCtrlPressed) {
+            state.isCtrlPressed = false;
+            // Restore hover label if there is a hovered layer
+            if (state.currentHoverLayer) {
+              showHoverAddressLabel(state.currentHoverLayer);
+            }
+            // Restore fixed address labels if "Show Address" is checked
+            if (dom.showAddressCheck.checked) {
+              state.hiddenAddressLabels.forEach((labelMarker, layerId) => {
+                const layer = state.featureData.get(layerId)?.layer;
+                if (layer && state.selectedLayers.has(layer)) {
+                  showAddressLabel(layer);
+                }
               });
             }
-          }).addTo(map);
-          layers.push(layer);
-        } catch (e) {
-          console.error(e);
-          msg('Load error: ' + url, true);
+            state.hiddenAddressLabels.clear();
+          }
+        });
+      }
+
+      const simplifyGeo = (geo, tolerance) => {
+        const simpRing = ring => simplify(ring.map(([x, y]) => ({ x, y })), tolerance, true).map(p => [p.x, p.y]);
+        const simpPoly = poly => poly.map(simpRing);
+        const simpGeom = g => {
+          if (g.type === 'Polygon') return { ...g, coordinates: simpPoly(g.coordinates) };
+          if (g.type === 'MultiPolygon') return { ...g, coordinates: g.coordinates.map(simpPoly) };
+          return g;
+        };
+        return { ...geo, features: geo.features.map(f => ({ ...f, geometry: simpGeom(f.geometry) })) };
+      };
+
+      const getName = feature => convertKanji(feature.properties?.name || feature.properties?.S_NAME || feature.properties?.N03_004 || 'Feature');
+      const getAddressFromProperties = feature => {
+        const p = feature.properties || {};
+        const parts = [p.PREF_NAME, p.CITY_NAME, p.S_NAME].filter(Boolean);
+        if (parts.length) return parts.join(' ');
+
+        const n03 = [p.N03_001, p.N03_002, p.N03_003, p.N03_004].filter(Boolean);
+        if (n03.length) return n03.join(' ');
+
+        const generic = ['address', 'name', 'name_ja'].map(field => p[field]).find(Boolean);
+        return generic || null;
+      };
+
+      function toggleSelect(layer) {
+        if (state.selectedLayers.has(layer)) {
+          state.selectedLayers.delete(layer);
+          layer.getElement().classList.remove('selected');
+          layer.setStyle({ fillOpacity: 0.2 });
+          hideAddressLabel(layer);
+        } else {
+          state.selectedLayers.add(layer);
+          layer.getElement().classList.add('selected');
+          if (dom.showAddressCheck.checked) {
+            showAddressLabel(layer);
+          }
         }
       }
 
-      if (layers.length) {
-        const group = new L.featureGroup(layers.flatMap(l => l.getLayers()));
-        map.fitBounds(group.getBounds());
+      function clearMap(clearUrls = true) {
+        state.layers.forEach(l => state.map.removeLayer(l));
+        state.addressLabels.forEach(marker => state.map.removeLayer(marker));
+        hideHoverAddressLabel();
+        if (state.marker) state.map.removeLayer(state.marker);
+
+        state.layers = [];
+        state.featureData.clear();
+        state.selectedLayers.clear();
+        state.addressLabels.clear();
+        state.marker = null;
+
+        if (clearUrls) {
+          dom.urlsContainer.innerHTML = '';
+          addUrlRow();
+          updateUrlParams();
+        }
+        showMessage('');
       }
-      msg('Ready');
-    }
 
-    function getName(feature) {
-      const p = feature.properties || {};
-      const raw = p.name || p.S_NAME || p.N03_004 || 'Feature';
-      return convertKanji(raw);
-    }
+      const clearAll = () => confirm('すべてのデータをクリアします。よろしいですか？') && clearMap(true);
 
-    function simplifyGeo(geo, tol) {
-      const simpRing = ring => simplify(ring.map(([x, y]) => ({ x, y })), tol, true).map(p => [p.x, p.y]);
-      const simpGeom = g => {
-        if (g.type === 'Polygon') return { ...g, coordinates: g.coordinates.map(simpRing) };
-        if (g.type === 'MultiPolygon') return { ...g, coordinates: g.coordinates.map(poly => poly.map(simpRing)) };
-        return g;
-      };
-      return { ...geo, features: geo.features.map(f => ({ ...f, geometry: simpGeom(f.geometry) })) };
-    }
+      async function searchAddress() {
+        const query = dom.searchInput.value.trim();
+        if (!query) return;
 
-    function toggleSelect(layer) {
-      if (selected.has(layer)) {
-        selected.delete(layer);
-        layer.getElement().classList.remove('selected');
-      } else {
-        selected.add(layer);
-        layer.getElement().classList.add('selected');
+        try {
+          const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1`);
+          const data = await res.json();
+          if (!data.length) return showMessage('Not found');
+
+          const { lat, lon, display_name } = data[0];
+          if (state.marker) state.map.removeLayer(state.marker);
+          state.marker = L.marker([lat, lon]).addTo(state.map).bindPopup(display_name).openPopup();
+          state.map.setView([lat, lon], 17);
+          showMessage('Found');
+        } catch (e) {
+          showMessage('Search error', true);
+        }
       }
-    }
 
-    function clear(clearUrls = true) {
-      layers.forEach(l => map.removeLayer(l));
-      layers = [];
-      features = [];
-      selected.clear();
-      if (marker) map.removeLayer(marker), marker = null;
-      if (clearUrls) {
-        document.getElementById('urls').innerHTML = '';
-        addUrl();
-        updateUrl();
-      }
-      msg('');
-    }
-
-    function clearAll() {
-      if (confirm('すべてのデータをクリアします。よろしいですか？')) {
-        clear(true);
-      }
-    }
-
-    function resetSelection() {
-      selected.forEach(l => l.getElement()?.classList.remove('selected'));
-      selected.clear();
-    }
-
-    function toggleUI() {
-      const main = document.getElementById('main');
-      const kml = document.getElementById('kml');
-      const btn = document.getElementById('toggleUI');
-      const isHidden = main.style.display === 'none';
-
-      main.style.display = isHidden ? 'block' : 'none';
-      kml.style.display = isHidden ? 'block' : 'none';
-      btn.textContent = isHidden ? 'Hide UI' : 'Show UI';
-    }
-
-    async function search() {
-      const q = document.getElementById('search').value.trim();
-      if (!q) return;
-
-      try {
-        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=1`);
-        const data = await res.json();
-        if (!data.length) return msg('Not found');
-
-        const { lat, lon, display_name } = data[0];
-        if (marker) map.removeLayer(marker);
-        marker = L.marker([lat, lon]).addTo(map).bindPopup(display_name).openPopup();
-        map.setView([lat, lon], 17);
-        msg('Found');
-      } catch (e) {
-        msg('Search error', true);
-      }
-    }
-
-    function exportKml() {
-      if (!selected.size) return;
-
-      let kml = '<?xml version="1.0" encoding="UTF-8"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document>';
-
-      selected.forEach(layer => {
-        const feature = features.find(f => f.layer === layer)?.feature;
-        if (!feature) return;
-
-        const name = getName(feature);
-        const geom = feature.geometry;
+      function exportKml() {
+        if (!state.selectedLayers.size) return;
 
         const coords2kml = coords => coords.map(c => `${c[0]},${c[1]},0`).join(' ');
         const makePoly = (exterior, holes = []) => {
@@ -314,40 +523,156 @@
           return p + '</Polygon>';
         };
 
-        kml += `<Placemark><name>${name.replace(/[<>&'"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' }[c]))}</name>`;
+        let kmlContent = state.selectedLayers.reduce((acc, layer) => {
+          const data = state.featureData.get(L.Util.stamp(layer));
+          if (!data) return acc;
 
-        if (geom.type === 'Polygon') {
-          kml += makePoly(geom.coordinates[0], geom.coordinates.slice(1));
-        } else if (geom.type === 'MultiPolygon') {
-          geom.coordinates.forEach(poly => kml += makePoly(poly[0], poly.slice(1)));
+          const { feature, name } = data;
+          const geom = feature.geometry;
+          let placemark = `<Placemark><name>${escapeXml(name)}</name>`;
+
+          if (geom.type === 'Polygon') {
+            placemark += makePoly(geom.coordinates[0], geom.coordinates.slice(1));
+          } else if (geom.type === 'MultiPolygon') {
+            geom.coordinates.forEach(poly => placemark += makePoly(poly[0], poly.slice(1)));
+          }
+          placemark += '</Placemark>';
+          return acc + placemark;
+        }, '');
+
+        const kml = `<?xml version="1.0" encoding="UTF-8"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document>${kmlContent}</Document></kml>`;
+        const blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = (dom.titleInput.value || 'features') + '.kml';
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }
+
+      const pointInPolygon = (point, coordinates) => {
+        const [px, py] = point;
+        let inside = false;
+        const ring = coordinates[0];
+        for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+          const [xi, yi] = ring[i];
+          const [xj, yj] = ring[j];
+          if (((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) {
+            inside = !inside;
+          }
         }
+        for (let h = 1; h < coordinates.length; h++) {
+          const hole = coordinates[h];
+          let inHole = false;
+          for (let i = 0, j = hole.length - 1; i < hole.length; j = i++) {
+            const [xi, yi] = hole[i];
+            const [xj, yj] = hole[j];
+            if (((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) {
+              inHole = !inHole;
+            }
+          }
+          if (inHole) inside = false;
+        }
+        return inside;
+      };
+      const pointToPolygonDistance = (point, coordinates) => {
+        const [px, py] = point;
+        let minDistSq = Infinity;
+        for (const ring of coordinates) {
+          for (let i = 0; i < ring.length - 1; i++) {
+            const [x1, y1] = ring[i];
+            const [x2, y2] = ring[i + 1];
+            let dx = x2 - x1, dy = y2 - y1;
+            let t = ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy);
+            t = Math.max(0, Math.min(1, t));
+            let closestX = x1 + t * dx;
+            let closestY = y1 + t * dy;
+            minDistSq = Math.min(minDistSq, (px - closestX) ** 2 + (py - closestY) ** 2);
+          }
+        }
+        return Math.sqrt(minDistSq);
+      };
+      const getPolygonLabelPosition = (coordinates) => {
+        if (!coordinates?.[0] || coordinates[0].length < 3) return null;
+        const ring = coordinates[0];
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const [x, y] of ring) { minX = Math.min(minX, x); minY = Math.min(minY, y); maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); }
+        const cellSize = Math.min(maxX - minX, maxY - minY) / 20;
+        if (cellSize === 0) return null;
+        let bestDist = 0, bestPoint = null;
+        for (let x = minX; x <= maxX; x += cellSize) {
+          for (let y = minY; y <= maxY; y += cellSize) {
+            if (pointInPolygon([x, y], coordinates)) {
+              const dist = pointToPolygonDistance([x, y], coordinates);
+              if (dist > bestDist) { bestDist = dist; bestPoint = [x, y]; }
+            }
+          }
+        }
+        if (!bestPoint) return null;
+        const fineSize = cellSize / 4;
+        for (let x = bestPoint[0] - cellSize; x <= bestPoint[0] + cellSize; x += fineSize) {
+          for (let y = bestPoint[1] - cellSize; y <= bestPoint[1] + cellSize; y += fineSize) {
+            if (pointInPolygon([x, y], coordinates)) {
+              const dist = pointToPolygonDistance([x, y], coordinates);
+              if (dist > bestDist) { bestDist = dist; bestPoint = [x, y]; }
+            }
+          }
+        }
+        return [bestPoint[1], bestPoint[0]];
+      };
+      const getFeatureLabelPosition = (feature) => {
+        const geom = feature.geometry;
+        if (geom.type === 'Polygon') return getPolygonLabelPosition(geom.coordinates);
+        if (geom.type === 'MultiPolygon') {
+          let maxArea = 0, bestPosition = null;
+          for (const polygon of geom.coordinates) {
+            const position = getPolygonLabelPosition(polygon);
+            if (position) {
+              const ring = polygon[0];
+              let area = 0;
+              for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+                area += (ring[j][0] + ring[i][0]) * (ring[j][1] - ring[i][1]);
+              }
+              if ((area /= 2) > maxArea) { maxArea = area; bestPosition = position; }
+            }
+          }
+          return bestPosition;
+        }
+        return null;
+      };
 
-        kml += '</Placemark>';
-      });
+      function init() {
+        state.map = L.map(dom.mapContainer, { zoomControl: false }).setView(INITIAL_VIEW.center, INITIAL_VIEW.zoom);
+        L.tileLayer(TILE_LAYER_URL, { attribution: TILE_LAYER_ATTRIBUTION }).addTo(state.map);
 
-      kml += '</Document></kml>';
+        dom.loadBtn.addEventListener('click', loadAll);
+        dom.clearBtn.addEventListener('click', clearAll);
+        dom.shareBtn.addEventListener('click', shareUrl);
+        dom.searchBtn.addEventListener('click', searchAddress);
+        dom.searchInput.addEventListener('keypress', e => e.key === 'Enter' && searchAddress());
+        dom.exportKmlBtn.addEventListener('click', exportKml);
+        dom.toggleUIBtn.addEventListener('click', toggleUI);
+        dom.showAddressCheck.addEventListener('change', toggleAddressDisplay);
+        dom.titleInput.addEventListener('input', () => { document.title = dom.titleInput.value || 'TopoJSON Viewer'; });
+        state.map.on('zoomend moveend', updateLabelRotations);
 
-      const blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = (document.getElementById('title').value || 'features') + '.kml';
-      a.click();
-    }
+        setupKeyEvents();
 
-    function share() {
-      updateUrl();
-      navigator.clipboard?.writeText(location.href).then(() => msg('URL copied')).catch(() => msg('Copy failed', true));
-    }
+        const params = new URLSearchParams(location.search);
+        const urlsParam = params.get('urls');
+        if (urlsParam) {
+          try {
+            const urls = JSON.parse(decodeURIComponent(urlsParam));
+            urls.forEach(u => addUrlRow(u.url, u.color));
+            setTimeout(loadAll, 100);
+          } catch (e) { console.error("Failed to load state from URL", e); }
+        }
+        if (dom.urlsContainer.children.length === 0) {
+          addUrlRow();
+        }
+      }
 
-    function msg(text, error = false) {
-      const el = document.getElementById('msg');
-      el.textContent = text;
-      el.className = `msg${error ? ' error' : ''}`;
-    }
-
-    document.getElementById('search').addEventListener('keypress', e => e.key === 'Enter' && search());
-    document.getElementById('title').addEventListener('input', () => document.title = document.getElementById('title').value || 'TopoJSON Viewer');
-    loadState();
+      document.addEventListener('DOMContentLoaded', init);
+    })();
   </script>
 </body>
 
