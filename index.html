@@ -19,7 +19,7 @@
     .ctrl {
       position: fixed;
       z-index: 1000;
-      background: rgba(255, 255, 255, 0.6);
+      background: rgba(255, 255, 255, 0.7);
       padding: 8px;
       border-radius: 4px;
       font-size: 13px;
@@ -84,8 +84,8 @@
 
     .address-label div {
       transform-origin: 0% 50%;
-      background-color: rgba(255, 255, 255, 0.7);
-      border: 0.1px solid #cccccca4;
+      background-color: rgb(255, 255, 255);
+      border: 0.1px solid #ccccccc9;
       border-radius: 2px;
       padding: 0.1px 0.3px;
       color: #333;
@@ -160,10 +160,89 @@
         selectedLayers: new Set(),
         marker: null,
         addressLabels: new Map(),
-        hiddenAddressLabels: new Map(), // New property to store hidden labels temporarily
+        hiddenAddressLabels: new Map(),
         currentHoverLabel: null,
         isCtrlPressed: false,
-        currentHoverLayer: null
+        currentHoverLayer: null,
+        persistedSelectedFeatures: new Set(),
+        sessionId: Date.now() + '_' + Math.random().toString(36).substr(2, 9)
+      };
+
+      // --- 状態保存・復元関数 ---
+      const saveState = () => {
+        try {
+          const stateData = {
+            urls: getUrls(),
+            selectedFeatures: Array.from(state.persistedSelectedFeatures),
+            mapView: {
+              center: state.map.getCenter(),
+              zoom: state.map.getZoom()
+            },
+            settings: {
+              kmlMode: dom.kmlModeCheck.checked,
+              showAddress: dom.showAddressCheck.checked,
+              simplify: dom.simplifyCheck.checked,
+              tolerance: dom.toleranceInput.value,
+              title: dom.titleInput.value
+            },
+            sessionId: state.sessionId,
+            timestamp: Date.now()
+          };
+
+          localStorage.setItem('topojsonViewerState', JSON.stringify(stateData));
+          console.log('State saved to localStorage:', stateData);
+        } catch (e) {
+          console.error('Failed to save state:', e);
+        }
+      };
+
+      const loadState = () => {
+        try {
+          const stateData = JSON.parse(localStorage.getItem('topojsonViewerState'));
+          if (!stateData) return false;
+
+          if (stateData.urls && stateData.urls.length > 0) {
+            stateData.urls.forEach(u => addUrlRow(u.url, u.color));
+          }
+
+          state.persistedSelectedFeatures = new Set(stateData.selectedFeatures || []);
+
+          if (stateData.mapView) {
+            state.map.setView([stateData.mapView.center.lat, stateData.mapView.center.lng], stateData.mapView.zoom);
+          }
+
+          if (stateData.settings) {
+            dom.kmlModeCheck.checked = stateData.settings.kmlMode || false;
+            dom.showAddressCheck.checked = stateData.settings.showAddress || false;
+            dom.simplifyCheck.checked = stateData.settings.simplify || false;
+            dom.toleranceInput.value = stateData.settings.tolerance || '0.0001';
+            dom.titleInput.value = stateData.settings.title || '';
+            if (stateData.settings.title) {
+              document.title = stateData.settings.title;
+            }
+          }
+
+          console.log('State loaded from localStorage:', stateData);
+          return true;
+        } catch (e) {
+          console.error('Failed to load state:', e);
+          return false;
+        }
+      };
+
+      const getFeatureId = (feature, layerIndex = 0) => {
+        const props = feature.properties || {};
+        const candidates = [
+          props.id,
+          props.ID,
+          props.name,
+          props.S_NAME,
+          props.N03_004,
+          props.PREF_NAME + '_' + props.CITY_NAME + '_' + props.S_NAME,
+          JSON.stringify(feature.geometry.coordinates[0]?.[0])
+        ].filter(Boolean);
+
+        return candidates[0] || `feature_${layerIndex}_${Date.now()}_${Math.random()}`;
       };
 
       // --- ヘルパー関数 ---
@@ -220,6 +299,7 @@
           state.addressLabels.forEach(labelMarker => state.map.removeLayer(labelMarker));
           state.addressLabels.clear();
         }
+        saveState();
       };
 
       const showHoverAddressLabel = (layer) => {
@@ -245,11 +325,12 @@
 
       function updateLabelRotations() {
         const labels = [...state.addressLabels.values(), ...state.currentHoverLabel ? [state.currentHoverLabel] : []];
-        const fontSize = getFontSizeForZoom(state.map.getZoom());
+        const baseFontSize = getFontSizeForZoom(state.map.getZoom());
 
         labels.forEach((markerA, i) => {
           const aPixel = state.map.latLngToContainerPoint(markerA.getLatLng());
           let maxAngle = 0;
+          let finalFontSize = baseFontSize;
 
           labels.forEach((markerB, j) => {
             if (i === j) return;
@@ -261,12 +342,18 @@
             if (dist < 100) {
               const angle = 30 * (100 - dist) / 100;
               if (Math.abs(angle) > Math.abs(maxAngle)) maxAngle = angle;
+
+              const sizeFactor = (100 - dist) / 100;
+              const newSize = baseFontSize * (1 - sizeFactor * 0.4);
+              if (newSize < finalFontSize) {
+                finalFontSize = newSize;
+              }
             }
           });
           const div = markerA.getElement()?.querySelector('div');
           if (div) {
             div.style.transform = `rotate(${maxAngle}deg)`;
-            div.style.fontSize = `${fontSize}px`;
+            div.style.fontSize = `${finalFontSize}px`;
           }
         });
       }
@@ -283,6 +370,7 @@
         if (urls.length) params.set('urls', encodeURIComponent(JSON.stringify(urls)));
         else params.delete('urls');
         history.replaceState({}, '', params.toString() ? `?${params}` : location.pathname);
+        saveState();
       };
 
       function addUrlRow(url = '', color = '') {
@@ -330,6 +418,7 @@
         showMessage('Loading...');
         clearMap(false);
 
+        let layerIndex = 0;
         for (const { url, color } of urls) {
           try {
             const res = await fetch(url);
@@ -343,10 +432,11 @@
             }
 
             const layerGroup = L.geoJSON(geo, {
-              style: { color, weight: 1, opacity: 0.7, fillOpacity: 0.2 },
-              onEachFeature: (feature, layer) => setupFeatureEvents(feature, layer, color)
+              style: { color, weight: 1, opacity: 0.7, fillOpacity: 0.15 },
+              onEachFeature: (feature, layer) => setupFeatureEvents(feature, layer, color, layerIndex)
             }).addTo(state.map);
             state.layers.push(layerGroup);
+            layerIndex++;
           } catch (e) {
             console.error(e);
             showMessage('Load error: ' + url, true);
@@ -359,13 +449,31 @@
             state.map.fitBounds(group.getBounds());
           }
         }
-        showMessage('Ready');
+
+        setTimeout(() => {
+          restoreSelectedFeatures();
+          showMessage('Ready');
+        }, 100);
       }
 
-      function setupFeatureEvents(feature, layer, color) {
+      function restoreSelectedFeatures() {
+        if (state.persistedSelectedFeatures.size === 0) return;
+
+        state.featureData.forEach((data, layerId) => {
+          if (state.persistedSelectedFeatures.has(data.featureId)) {
+            toggleSelect(data.layer, false);
+          }
+        });
+
+        console.log(`Restored ${state.selectedLayers.size} selected features`);
+      }
+
+      function setupFeatureEvents(feature, layer, color, layerIndex = 0) {
         const layerId = L.Util.stamp(layer);
         const name = getName(feature);
-        state.featureData.set(layerId, { feature, layer, color, name });
+        const featureId = getFeatureId(feature, layerIndex);
+
+        state.featureData.set(layerId, { feature, layer, color, name, featureId });
 
         layer.on('click', e => {
           if (dom.kmlModeCheck.checked && (e.originalEvent.ctrlKey || e.originalEvent.metaKey)) {
@@ -375,9 +483,8 @@
         });
 
         layer.on('mouseover', (e) => {
-          // console.log('mouseover event:', { ctrlKey: e.originalEvent.ctrlKey, metaKey: e.originalEvent.metaKey });
-          state.currentHoverLayer = layer; // ホバー中のレイヤーを記録
-          if (!state.isCtrlPressed) { // Ctrl/Commandが押されていない場合のみ表示
+          state.currentHoverLayer = layer;
+          if (!state.isCtrlPressed) {
             showHoverAddressLabel(layer);
           }
           if (!state.selectedLayers.has(layer)) {
@@ -387,22 +494,19 @@
 
         layer.on('mouseout', () => {
           hideHoverAddressLabel();
-          state.currentHoverLayer = null; // ホバーが終了したらリセット
+          state.currentHoverLayer = null;
           if (!state.selectedLayers.has(layer)) {
-            layer.setStyle({ fillOpacity: 0.2 });
+            layer.setStyle({ fillOpacity: 0.15 });
           }
         });
       }
 
-      // グローバルキーイベントリスナー
       function setupKeyEvents() {
         document.addEventListener('keydown', (e) => {
           if (e.ctrlKey || e.metaKey) {
             if (!state.isCtrlPressed) {
               state.isCtrlPressed = true;
-              // Hide hover label
               hideHoverAddressLabel();
-              // Hide fixed address labels and store them
               state.addressLabels.forEach((labelMarker, layerId) => {
                 state.map.removeLayer(labelMarker);
                 state.hiddenAddressLabels.set(layerId, labelMarker);
@@ -415,11 +519,9 @@
         document.addEventListener('keyup', (e) => {
           if (!e.ctrlKey && !e.metaKey && state.isCtrlPressed) {
             state.isCtrlPressed = false;
-            // Restore hover label if there is a hovered layer
             if (state.currentHoverLayer) {
               showHoverAddressLabel(state.currentHoverLayer);
             }
-            // Restore fixed address labels if "Show Address" is checked
             if (dom.showAddressCheck.checked) {
               state.hiddenAddressLabels.forEach((labelMarker, layerId) => {
                 const layer = state.featureData.get(layerId)?.layer;
@@ -445,30 +547,32 @@
       };
 
       const getName = feature => convertKanji(feature.properties?.name || feature.properties?.S_NAME || feature.properties?.N03_004 || 'Feature');
-      const getAddressFromProperties = feature => {
-        const p = feature.properties || {};
-        const parts = [p.PREF_NAME, p.CITY_NAME, p.S_NAME].filter(Boolean);
-        if (parts.length) return parts.join(' ');
 
-        const n03 = [p.N03_001, p.N03_002, p.N03_003, p.N03_004].filter(Boolean);
-        if (n03.length) return n03.join(' ');
+      function toggleSelect(layer, shouldSave = true) {
+        const layerId = L.Util.stamp(layer);
+        const data = state.featureData.get(layerId);
 
-        const generic = ['address', 'name', 'name_ja'].map(field => p[field]).find(Boolean);
-        return generic || null;
-      };
-
-      function toggleSelect(layer) {
         if (state.selectedLayers.has(layer)) {
           state.selectedLayers.delete(layer);
           layer.getElement().classList.remove('selected');
-          layer.setStyle({ fillOpacity: 0.2 });
+          layer.setStyle({ fillOpacity: 0.15 });
           hideAddressLabel(layer);
+          if (data) {
+            state.persistedSelectedFeatures.delete(data.featureId);
+          }
         } else {
           state.selectedLayers.add(layer);
           layer.getElement().classList.add('selected');
           if (dom.showAddressCheck.checked) {
             showAddressLabel(layer);
           }
+          if (data) {
+            state.persistedSelectedFeatures.add(data.featureId);
+          }
+        }
+
+        if (shouldSave) {
+          saveState();
         }
       }
 
@@ -488,11 +592,21 @@
           dom.urlsContainer.innerHTML = '';
           addUrlRow();
           updateUrlParams();
+          state.persistedSelectedFeatures.clear();
         }
         showMessage('');
+
+        if (clearUrls) {
+          saveState();
+        }
       }
 
-      const clearAll = () => confirm('すべてのデータをクリアします。よろしいですか？') && clearMap(true);
+      const clearAll = () => {
+        if (confirm('すべてのデータをクリアします。よろしいですか？')) {
+          clearMap(true);
+          localStorage.removeItem('topojsonViewerState');
+        }
+      };
 
       async function searchAddress() {
         const query = dom.searchInput.value.trim();
@@ -508,6 +622,7 @@
           state.marker = L.marker([lat, lon]).addTo(state.map).bindPopup(display_name).openPopup();
           state.map.setView([lat, lon], 17);
           showMessage('Found');
+          saveState();
         } catch (e) {
           showMessage('Search error', true);
         }
@@ -549,6 +664,7 @@
         URL.revokeObjectURL(a.href);
       }
 
+      // --- ポリゴン関連のヘルパー関数 ---
       const pointInPolygon = (point, coordinates) => {
         const [px, py] = point;
         let inside = false;
@@ -574,6 +690,7 @@
         }
         return inside;
       };
+
       const pointToPolygonDistance = (point, coordinates) => {
         const [px, py] = point;
         let minDistSq = Infinity;
@@ -591,6 +708,7 @@
         }
         return Math.sqrt(minDistSq);
       };
+
       const getPolygonLabelPosition = (coordinates) => {
         if (!coordinates?.[0] || coordinates[0].length < 3) return null;
         const ring = coordinates[0];
@@ -619,6 +737,7 @@
         }
         return [bestPoint[1], bestPoint[0]];
       };
+
       const getFeatureLabelPosition = (feature) => {
         const geom = feature.geometry;
         if (geom.type === 'Polygon') return getPolygonLabelPosition(geom.coordinates);
@@ -652,23 +771,47 @@
         dom.exportKmlBtn.addEventListener('click', exportKml);
         dom.toggleUIBtn.addEventListener('click', toggleUI);
         dom.showAddressCheck.addEventListener('change', toggleAddressDisplay);
-        dom.titleInput.addEventListener('input', () => { document.title = dom.titleInput.value || 'TopoJSON Viewer'; });
-        state.map.on('zoomend moveend', updateLabelRotations);
+        dom.kmlModeCheck.addEventListener('change', saveState);
+        dom.simplifyCheck.addEventListener('change', saveState);
+        dom.toleranceInput.addEventListener('input', saveState);
+        dom.titleInput.addEventListener('input', () => {
+          document.title = dom.titleInput.value || 'TopoJSON Viewer';
+          saveState();
+        });
+
+        state.map.on('zoomend moveend', () => {
+          updateLabelRotations();
+          saveState();
+        });
 
         setupKeyEvents();
 
-        const params = new URLSearchParams(location.search);
-        const urlsParam = params.get('urls');
-        if (urlsParam) {
-          try {
-            const urls = JSON.parse(decodeURIComponent(urlsParam));
-            urls.forEach(u => addUrlRow(u.url, u.color));
+        const stateLoaded = loadState();
+
+        if (!stateLoaded) {
+          const params = new URLSearchParams(location.search);
+          const urlsParam = params.get('urls');
+          if (urlsParam) {
+            try {
+              const urls = JSON.parse(decodeURIComponent(urlsParam));
+              urls.forEach(u => addUrlRow(u.url, u.color));
+              setTimeout(loadAll, 100);
+            } catch (e) {
+              console.error("Failed to load state from URL", e);
+            }
+          }
+        } else {
+          if (getUrls().length > 0) {
             setTimeout(loadAll, 100);
-          } catch (e) { console.error("Failed to load state from URL", e); }
+          }
         }
+
         if (dom.urlsContainer.children.length === 0) {
           addUrlRow();
         }
+
+        window.addEventListener('beforeunload', saveState);
+        setInterval(saveState, 1000);
       }
 
       document.addEventListener('DOMContentLoaded', init);
