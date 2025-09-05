@@ -27,6 +27,8 @@ function saveState() {
       settings: {
         kmlMode: document.getElementById('kmlMode').checked,
         showAddress: document.getElementById('showAddress').checked,
+        renderOffscreen: document.getElementById('renderOffscreen').checked,
+        autoMove: document.getElementById('autoMove').checked,
         simplify: document.getElementById('simplify').checked,
         tolerance: document.getElementById('tolerance').value,
         title: document.getElementById('title').value
@@ -43,6 +45,14 @@ function saveState() {
 
 function loadState() {
   try {
+    // クリアフラグが設定されている場合はデータを読み込まない
+    const clearFlag = localStorage.getItem('clearAllFlag');
+    if (clearFlag === 'true') {
+      localStorage.removeItem('clearAllFlag');
+      console.log('Clear flag detected, skipping state load');
+      return false;
+    }
+
     const stateData = JSON.parse(localStorage.getItem(CONFIG.STORAGE_KEY));
     if (!stateData) return false;
 
@@ -59,6 +69,8 @@ function loadState() {
     if (stateData.settings) {
       document.getElementById('kmlMode').checked = stateData.settings.kmlMode || false;
       document.getElementById('showAddress').checked = stateData.settings.showAddress || false;
+      document.getElementById('renderOffscreen').checked = stateData.settings.renderOffscreen !== undefined ? stateData.settings.renderOffscreen : true;
+      document.getElementById('autoMove').checked = stateData.settings.autoMove !== undefined ? stateData.settings.autoMove : CONFIG.AUTO_MOVE_TO_NEW_FEATURES;
       document.getElementById('simplify').checked = stateData.settings.simplify || false;
       document.getElementById('tolerance').value = stateData.settings.tolerance || '0.0001';
       document.getElementById('title').value = stateData.settings.title || '';
@@ -77,8 +89,39 @@ function loadState() {
 
 // 地図を初期化
 function initMap() {
-  state.map = L.map('map', { zoomControl: false }).setView(INITIAL_VIEW.center, INITIAL_VIEW.zoom);
+  const renderOffscreen = document.getElementById('renderOffscreen').checked;
+  const renderer = renderOffscreen ? L.canvas({ padding: 1 }) : null;
+
+  state.map = L.map('map', {
+    zoomControl: true, // ズームコントロールを有効にする
+    zoomSnap: 0.1,
+    zoomDelta: 0.25,
+    renderer: renderer
+  }).setView(INITIAL_VIEW.center, INITIAL_VIEW.zoom);
+
+  // ズームコントロールパネルを左下に配置
+  state.map.zoomControl.setPosition('bottomright');
+
   L.tileLayer(CONFIG.TILE_LAYER_URL, { attribution: CONFIG.TILE_LAYER_ATTRIBUTION }).addTo(state.map);
+}
+
+// 地図を再生成
+function recreateMap() {
+  if (state.map) {
+    // 現在のビューを保存
+    const currentCenter = state.map.getCenter();
+    const currentZoom = state.map.getZoom();
+
+    // 地図を破棄
+    state.map.remove();
+    state.map = null;
+
+    // 新しい地図を初期化
+    initMap();
+
+    // 保存したビューを復元
+    state.map.setView(currentCenter, currentZoom);
+  }
 }
 
 // レイヤーの色を更新
@@ -234,16 +277,28 @@ function toggleSelect(layer, shouldSave = true) {
 }
 
 // すべてをクリア
-function clearAll() {
+async function clearAll() {
   if (confirm('すべてのデータをクリアしますか？\n（保存された設定、Cookie、地図データが削除されます）')) {
     console.log('Starting comprehensive data clear...');
     try {
+      // まずクリアフラグを設定
+      localStorage.setItem('clearAllFlag', 'true');
+
+      // すべてのストレージをクリア (Service Workerの登録解除とキャッシュクリアを含む)
+      await clearBrowserStorage();
+
+      // 内部状態をリセット
       clearAllDataSources();
-      document.getElementById('data-sources').innerHTML = '';
-      addDataSourceRow({ type: 'url', url: '', color: randomColor() });
       state.persistedSelectedFeatures.clear();
-      localStorage.removeItem('kmlCache');
-      clearBrowserStorage();
+
+      // UIのデータソース行を完全にクリアし、新しい空の行を1つだけ追加
+      const dataSourcesContainer = document.getElementById('data-sources');
+      dataSourcesContainer.innerHTML = '';
+      setTimeout(() => {
+        addDataSourceRow({ type: 'url', url: '', color: randomColor() });
+      }, 10);
+
+      // ページリロードでアプリケーションを完全に初期状態に戻す
       resetApplicationState();
     } catch (e) {
       console.error('Error during clear operation:', e);
@@ -253,19 +308,35 @@ function clearAll() {
 }
 
 // ブラウザストレージのクリア
-function clearBrowserStorage() {
+async function clearBrowserStorage() {
   try {
-    // localStorageのクリア
-    localStorage.removeItem('topojsonViewerState');
-    console.log('localStorage cleared');
+    // localStorageの特定のデータをクリア
+    localStorage.removeItem(CONFIG.STORAGE_KEY);
+    localStorage.removeItem('kmlCache');
+    console.log('localStorage cleared specific keys');
 
-    // sessionStorageのクリア（念のため）
+    // sessionStorageのクリア
     sessionStorage.clear();
     console.log('sessionStorage cleared');
 
     // Cookieのクリア
     clearCookies();
     console.log('Cookies cleared');
+
+    // Service Workerの登録解除とキャッシュのクリア
+    if ('serviceWorker' in navigator) {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      for (const registration of registrations) {
+        await registration.unregister();
+        console.log('Service Worker unregistered:', registration.scope);
+      }
+      // キャッシュAPIのクリア
+      const cacheNames = await caches.keys();
+      for (const cacheName of cacheNames) {
+        await caches.delete(cacheName);
+        console.log('Cache deleted:', cacheName);
+      }
+    }
 
   } catch (e) {
     console.error('Error clearing browser storage:', e);

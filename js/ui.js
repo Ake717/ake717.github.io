@@ -118,19 +118,6 @@ function shareUrl() {
     .catch(() => showMessage('Copy failed', true));
 }
 
-// UIの表示/非表示を切り替え
-function toggleUI() {
-  const mainCtrl = document.getElementById('main');
-  const kmlCtrl = document.getElementById('kml');
-  const toggleUIBtn = document.getElementById('toggleUI');
-
-  const isHidden = mainCtrl.style.display === 'none';
-  const display = isHidden ? 'block' : 'none';
-  mainCtrl.style.display = display;
-  kmlCtrl.style.display = display;
-  toggleUIBtn.textContent = isHidden ? 'Hide UI' : 'Show UI';
-}
-
 // 住所検索
 async function searchAddress() {
   const query = document.getElementById('search').value.trim();
@@ -278,7 +265,7 @@ function updateLabelRotations() {
     const div = marker.getElement()?.querySelector('div');
     if (div) {
       const labelHeight = div.offsetHeight;
-      const offset = dynamicVerticalOffset + (labelHeight / 15);
+      const offset = dynamicVerticalOffset + (labelHeight / 20);
 
       // 偶数番目のラベルは上に、奇数番目のラベルは下にずらす
       const offsetY = (index % 2 === 0) ? -offset : offset;

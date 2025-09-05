@@ -61,7 +61,6 @@ input[type="color"] {
   margin-left: 27px;
 }
 
-
 .selected {
   stroke: #f00 !important;
   stroke-width: 3px !important;
@@ -95,4 +94,10 @@ input[type="color"] {
   left: 50%;
   transform: translate(-50%, -50%);
   pointer-events: none;
+}
+
+.leaflet-control-zoom a {
+  width: 30px;
+  height: 30px;
+  line-height: 30px;
 }
