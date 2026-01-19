@@ -23,6 +23,70 @@ function createUrlSource(url, color) {
   };
 }
 
+// ファイルデータソースを作成
+function createFileSource(file, color) {
+  return {
+    type: 'file',
+    id: file.name + '_' + file.lastModified,
+    file,
+    color,
+    isKml: false,
+    get name() { return this.file.name; },
+    async load() {
+      try {
+        const text = await this.file.text();
+        const data = JSON.parse(text);
+        // GeoJSONとTopoJSONの両方に対応
+        if (data.type === 'FeatureCollection' || data.type === 'Feature' || data.type === 'GeometryCollection') {
+          return data;
+        } else if (data.objects) {
+          // TopoJSON
+          const key = Object.keys(data.objects)[0];
+          return topojson.feature(data, data.objects[key]);
+        } else {
+          throw new Error('Invalid GeoJSON or TopoJSON format');
+        }
+      } catch (e) {
+        console.error(e);
+        showMessage('Load error: ' + this.file.name, true);
+        throw e;
+      }
+    }
+  };
+}
+
+// ファイル内容からデータソースを作成
+function createFileSourceFromContent(content, fileName, color, id) {
+  return {
+    type: 'file',
+    id,
+    fileName,
+    content,
+    color,
+    isKml: false,
+    get name() { return this.fileName; },
+    async load() {
+      try {
+        const data = JSON.parse(this.content);
+        // GeoJSONとTopoJSONの両方に対応
+        if (data.type === 'FeatureCollection' || data.type === 'Feature' || data.type === 'GeometryCollection') {
+          return data;
+        } else if (data.objects) {
+          // TopoJSON
+          const key = Object.keys(data.objects)[0];
+          return topojson.feature(data, data.objects[key]);
+        } else {
+          throw new Error('Invalid GeoJSON or TopoJSON format');
+        }
+      } catch (e) {
+        console.error(e);
+        showMessage('Load error: ' + this.fileName, true);
+        throw e;
+      }
+    }
+  };
+}
+
 // ジオメトリを簡略化
 function simplifyGeo(geo, tolerance) {
   const simpRing = ring => simplify(ring.map(([x, y]) => ({ x, y })), tolerance, true).map(p => [p.x, p.y]);

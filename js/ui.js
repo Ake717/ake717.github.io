@@ -24,7 +24,9 @@ function addDataSourceRow(source) {
   row.dataset.type = source.type;
 
   const inputHtml = source.type === 'url'
-    ? `<input type="text" value="${source.url}" placeholder="TopoJSON URL" style="flex: 1;">`
+    ? `<input type="text" value="${source.url || ''}" placeholder="TopoJSON URL" style="flex: 1;">`
+    : source.type === 'file'
+    ? `<span class="file-name" title="${source.name}">${source.name}</span><input type="file" class="file-upload" accept=".txt,.json,.geojson" style="display:none;">`
     : `<span class="kml-name">${source.name}</span>`;
 
   row.innerHTML = `
@@ -34,11 +36,28 @@ function addDataSourceRow(source) {
     <button class="remove">-</button>
   `;
 
-  row.querySelector('.add').addEventListener('click', () => addDataSourceRow({ type: 'url', url: '', color: randomColor() }));
+  row.querySelector('.add').addEventListener('click', () => {
+    const menu = document.createElement('div');
+    menu.className = 'source-menu';
+    menu.innerHTML = `
+      <button class="menu-item" data-type="url">URL</button>
+      <button class="menu-item" data-type="file">ファイル</button>
+    `;
+    menu.addEventListener('click', (e) => {
+      if (e.target.dataset.type === 'url') {
+        addDataSourceRow({ type: 'url', url: '', color: randomColor() });
+      } else if (e.target.dataset.type === 'file') {
+        addDataSourceRow({ type: 'file', id: '', color: randomColor() });
+      }
+      menu.remove();
+    });
+    row.parentElement.appendChild(menu);
+    setTimeout(() => menu.remove(), 5000);
+  });
+
   row.querySelector('.remove').addEventListener('click', () => {
     const rows = document.querySelectorAll('.data-source-row');
     if (rows.length > 1) {
-      // レイヤーを削除してからUIを更新
       const sourceId = row.dataset.id;
       removeLayer(sourceId);
       row.remove();
@@ -52,10 +71,40 @@ function addDataSourceRow(source) {
     urlInput.addEventListener('change', (e) => {
       const newUrl = e.target.value;
       const oldId = row.dataset.id;
-      // IDを更新し、新しいURLで状態を保存
       row.dataset.id = newUrl;
       updateDataSourceId(oldId, newUrl);
       saveState();
+    });
+  } else if (source.type === 'file') {
+    const fileUpload = row.querySelector('.file-upload');
+    const fileName = row.querySelector('.file-name');
+    
+    fileUpload.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        const fileId = file.name + '_' + file.lastModified;
+        row.dataset.id = fileId;
+        fileName.textContent = file.name;
+        fileName.title = file.name;
+        
+        // ファイルをメモリに保存
+        row.dataset.file = JSON.stringify({
+          name: file.name,
+          size: file.size,
+          type: file.type,
+          lastModified: file.lastModified
+        });
+        
+        // ファイルの内容を保存
+        file.text().then(content => {
+          row.dataset.fileContent = content;
+          saveState();
+        });
+      }
+    });
+    
+    fileName.addEventListener('click', () => {
+      fileUpload.click();
     });
   }
 
@@ -103,6 +152,11 @@ function getDataSources() {
     if (type === 'url') {
       const url = row.querySelector('input[type="text"]').value.trim();
       return { type, id: url, url, color };
+    } else if (type === 'file') {
+      const id = row.dataset.id;
+      const name = row.querySelector('.file-name').textContent;
+      const fileContent = row.dataset.fileContent;
+      return { type, id, name, fileContent, color };
     } else {
       const id = row.dataset.id;
       const name = row.querySelector('.kml-name').textContent;

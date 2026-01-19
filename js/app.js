@@ -2,15 +2,33 @@
 async function loadAllDataSources() {
   const sourceData = getDataSources();
 
-  // 既存のデータソースIDを収集
-  const existingIds = new Set(state.dataSources.map(ds => ds.id));
+  // 既存のデータソースを識別用マップで管理（URL またはID で識別）
+  const existingSourceMap = new Map();
+  for (const ds of state.dataSources) {
+    const key = ds.url || ds.id; // URLまたはIDをキーとする
+    existingSourceMap.set(key, ds);
+  }
 
-  // 新しいデータソースのみを追加
+  // 新しいデータソースのみを追加（既存レイヤーは再読み込みしない）
+  const newDataSources = [];
   for (const data of sourceData) {
-    if (data.type === 'url' && data.url && !existingIds.has(data.id)) {
-      state.dataSources.push(createUrlSource(data.url, data.color));
-    } else if (data.type === 'kml' && data.id && !existingIds.has(data.id)) {
-      state.dataSources.push(createKmlSource(data.id, data.name, data.color));
+    const key = data.url || data.id;
+    
+    if (!existingSourceMap.has(key)) {
+      // 新規データソース
+      let newSource = null;
+      if (data.type === 'url' && data.url) {
+        newSource = createUrlSource(data.url, data.color);
+      } else if (data.type === 'file' && data.id && data.fileContent) {
+        newSource = createFileSourceFromContent(data.fileContent, data.name, data.color, data.id);
+      } else if (data.type === 'kml' && data.id) {
+        newSource = createKmlSource(data.id, data.name, data.color);
+      }
+      
+      if (newSource) {
+        state.dataSources.push(newSource);
+        newDataSources.push(newSource);
+      }
     }
   }
 
@@ -20,7 +38,8 @@ async function loadAllDataSources() {
   // 新しく追加されたレイヤーの境界を追跡
   const newLayerBounds = [];
 
-  for (const source of state.dataSources) {
+  // 新規データソースのみを読み込んでマップに追加
+  for (const source of newDataSources) {
     try {
       let geoJson = await source.load();
       if (simplify && tolerance > 0) {

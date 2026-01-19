@@ -33,10 +33,20 @@ function escapeXml(str) {
 }
 
 // メッセージ表示
-function showMessage(text, isError = false) {
+function showMessage(text, isError = false, duration = 5000) {
   const msgEl = document.getElementById('msg');
   msgEl.textContent = text;
   msgEl.className = `msg${isError ? ' error' : ''}`;
+  
+  // 5秒後に自動的にクリア（エラーメッセージの場合は10秒）
+  const clearDuration = isError ? 10000 : duration;
+  if (msgEl.messageTimeout) clearTimeout(msgEl.messageTimeout);
+  msgEl.messageTimeout = setTimeout(() => {
+    if (msgEl.textContent === text) {  // 他のメッセージで上書きされていない場合のみクリア
+      msgEl.textContent = '';
+      msgEl.className = 'msg';
+    }
+  }, clearDuration);
 }
 
 // フィーチャIDを生成
