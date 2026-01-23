@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+  <meta charset="UTF-8">
+  <title>TopoJSON Viewer</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="css/styles.css" />
+  <link rel="stylesheet" href="css/print.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/topojson-client@3"></script>
+  <script src="https://unpkg.com/simplify-js@1.2.4/simplify.js"></script>
+  <script src="https://unpkg.com/polylabel@1.1.0/index.js"></script>
+</head>
+
+<body>
+  <div id="main" class="ctrl">
+    <div>
+      <button id="loadBtn" title="アップロードされたデータをロードして地図に表示します。">Load</button>
+      <button id="clearBtn" title="すべてのデータ、設定、ブラウザキャッシュをクリアします。">Clear</button>
+      <button id="shareBtn" title="現在のページURLをコピーします。">Copy</button>
+      <a href="https://geoshape.ex.nii.ac.jp/ka/resource/" target="_blank">Geo Data</a>
+    </div>
+    <div id="data-sources"></div>
+    <div class="search-row"><input id="search" placeholder="検索"> <button id="searchBtn" title="入力した地名を検索します。">Go</button></div>
+    <div id="msg" class="msg"></div>
+  </div>
+
+  <div id="kml" class="ctrl">
+    <label title="Ctrl + クリックでフィーチャーを選択できるようになります。"><input type="checkbox" id="kmlMode"> KML Mode</label><br>
+    <label title="選択したフィーチャーの住所を表示します。"><input type="checkbox" id="showAddress"> Show Address</label><br>
+    <label title="新しいデータを読み込んだ際に、その位置へ自動的に地図を移動します。"><input type="checkbox" id="autoMove"> Auto Move</label><br>
+    <label title="フィーチャーを簡略化して表示を高速化します。"><input type="checkbox" id="simplify"> Simplify</label>
+    <input type="number" id="tolerance" value="0.0001" step="0.0001" style="width:70px;" title="簡略化の許容値（値が小さいほど詳細）"><br>
+    <input id="title" placeholder="Title" style="width:120px;" title="データセットのタイトル（自動KML Mode機能で使用）"><br>
+    <button id="importKmlBtn" title="KMLファイルをインポートします。">Import KML</button>
+    <input type="file" id="kmlFileInput" accept=".kml" style="display:none">
+    <button id="exportKmlBtn" title="選択されたフィーチャーをKMLファイルとしてエクスポートします。">Export KML</button>
+    <button id="importTxtBtn" title="TXTまたはJSONファイルをインポート。フィーチャー名と照合して自動選択します。">Import TXT</button>
+    <input type="file" id="txtFileInput" accept=".txt,.json" style="display:none">
+    <button id="exportTxtBtn" title="選択されたフィーチャーをJSON形式でエクスポートします。">Export TXT</button>
+  </div>
+
+  <div id="map"></div>
+
+  <!-- JavaScript modules -->
+  <script src="js/config.js"></script>
+  <script src="js/utils.js"></script>
+  <script src="js/storage.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/map.js"></script>
+  <script src="js/print.js"></script>
+  <script src="js/app.js"></script>
+</body>
+
+</html>
