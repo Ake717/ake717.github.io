@@ -98,6 +98,10 @@ function addDataSourceRow(source) {
         // ファイルの内容を保存
         file.text().then(content => {
           row.dataset.fileContent = content;
+          // TXT形式の場合、テキスト解析と自動KML Mode処理
+          if (file.name.endsWith('.txt')) {
+            checkAndEnableKmlModeForTxt(content);
+          }
           saveState();
         });
       }
@@ -439,4 +443,161 @@ function setupMapEvents() {
       saveState();
     }, 100); // 100msデバウンス
   });
+}
+
+// TXTまたはJSON形式のファイルを解析してフィーチャーを自動選択
+function processAndSelectFeaturesFromFile(content, fileName) {
+  if (!content || content.trim().length === 0) {
+    showMessage('File is empty', true);
+    return;
+  }
+
+  // ファイル形式を判定（JSON or TXT）
+  let lines = [];
+  const lowerFileName = fileName.toLowerCase();
+  
+  try {
+    // JSON形式の判定
+    if (lowerFileName.endsWith('.json') || content.trim().startsWith('{') || content.trim().startsWith('[')) {
+      const jsonData = JSON.parse(content);
+      
+      // JSON形式：features配列を抽出
+      if (Array.isArray(jsonData)) {
+        lines = jsonData;
+      } else if (jsonData.features && Array.isArray(jsonData.features)) {
+        lines = jsonData.features;
+      } else {
+        showMessage('Invalid JSON format. Expected array or object with "features" property', true);
+        return;
+      }
+    } else {
+      // TXT形式：行単位で分割
+      lines = content.trim().split(/\r?\n/).filter(line => line.trim().length > 0);
+    }
+  } catch (e) {
+    // JSON解析失敗の場合はTXT形式として処理
+    lines = content.trim().split(/\r?\n/).filter(line => line.trim().length > 0);
+  }
+
+  if (lines.length === 0) {
+    showMessage('No valid lines found in file', true);
+    return;
+  }
+
+  // 正規化関数：テキスト正規化と数字表記の統一
+  function normalizeText(text) {
+    // スペース・タブを削除
+    let normalized = text.trim();
+    // 全角スペースも削除
+    normalized = normalized.replace(/　/g, '');
+    // 漢字数字をアラビア数字に変換
+    normalized = convertKanji(normalized);
+    return normalized.toLowerCase();
+  }
+
+  let successCount = 0;
+  let failureCount = 0;
+  const failureLog = [];
+
+  // ファイル内の各行をフィーチャーと照合
+  for (const line of lines) {
+    const normalizedLine = normalizeText(line);
+    let matched = false;
+
+    // state.featureDataを走査してフィーチャーをマッチング
+    for (const [layerId, data] of state.featureData) {
+      if (!data || !data.layer) continue;
+
+      const normalizedFeatureName = normalizeText(data.name);
+
+      // 完全一致をチェック
+      if (normalizedFeatureName === normalizedLine) {
+        // フィーチャーを選択
+        if (!state.selectedLayers.has(data.layer)) {
+          toggleSelect(data.layer, false);
+        }
+        successCount++;
+        matched = true;
+        break;
+      }
+    }
+
+    if (!matched) {
+      failureCount++;
+      failureLog.push(`Not found: "${line}"`);
+    }
+  }
+
+  // KML Modeを有効化（自動選択したため）
+  const kmlModeCheckbox = document.getElementById('kmlMode');
+  if (kmlModeCheckbox && !kmlModeCheckbox.checked) {
+    kmlModeCheckbox.checked = true;
+    kmlModeCheckbox.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  // アラートメッセージを作成
+  let alertMessage = `=== Feature Selection Result ===\n\n`;
+  alertMessage += `Total lines: ${lines.length}\n`;
+  alertMessage += `✓ Success: ${successCount}\n`;
+  alertMessage += `✗ Failed: ${failureCount}\n`;
+  
+  if (failureLog.length > 0) {
+    alertMessage += `\n--- Failure Log ---\n`;
+    failureLog.forEach(log => {
+      alertMessage += `${log}\n`;
+    });
+  }
+
+  alertMessage += `\n====================================`;
+
+  // アラートで結果を表示
+  alert(alertMessage);
+
+  // コンソールにも出力
+  console.log(alertMessage);
+
+  // 状態を保存
+  saveState();
+}
+
+// 選択されたフィーチャーをJSON形式でエクスポート
+function exportTxt() {
+  if (state.selectedLayers.size === 0) {
+    showMessage('No features selected', true);
+    return;
+  }
+
+  // 選択されたフィーチャー名を取得
+  const selectedNames = [];
+  state.selectedLayers.forEach(layer => {
+    const layerId = L.Util.stamp(layer);
+    const data = state.featureData.get(layerId);
+    if (data && data.name) {
+      selectedNames.push(data.name);
+    }
+  });
+
+  if (selectedNames.length === 0) {
+    showMessage('No feature names found', true);
+    return;
+  }
+
+  // JSON形式で作成
+  const jsonData = {
+    title: document.getElementById('title').value || 'features',
+    timestamp: new Date().toISOString(),
+    features: selectedNames
+  };
+
+  const jsonContent = JSON.stringify(jsonData, null, 2);
+
+  // JSONファイルをダウンロード
+  const fileName = `${jsonData.title}_${Date.now()}.json`;
+  const blob = new Blob([jsonContent], { type: 'application/json;charset=utf-8;' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = fileName;
+  link.click();
+
+  showMessage(`JSON file "${fileName}" exported (${selectedNames.length} features)`);
 }

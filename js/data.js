@@ -148,31 +148,29 @@ function pointToPolygonDistance(point, coordinates) {
 // ポリゴンのラベル位置を取得
 function getPolygonLabelPosition(coordinates) {
   if (!coordinates?.[0] || coordinates[0].length < 3) return null;
+  
+  try {
+    // Polylabelでポリゴンの最適なラベル位置を計算
+    // coordinates形式は[lng, lat]なので、polylabelに直接渡す
+    const labelPoint = polylabel(coordinates, 1.0);
+    
+    if (labelPoint && labelPoint.length === 2) {
+      // polylabelは[lng, lat]形式で返すため、Leafletの[lat, lng]に変換
+      return [labelPoint[1], labelPoint[0]];
+    }
+  } catch (e) {
+    console.warn('Polylabel calculation failed:', e);
+  }
+  
+  // Polylabel失敗時はフォールバック：簡単な重心計算
   const ring = coordinates[0];
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const [x, y] of ring) { minX = Math.min(minX, x); minY = Math.min(minY, y); maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); }
-  const cellSize = Math.min(maxX - minX, maxY - minY) / 20;
-  if (cellSize === 0) return null;
-  let bestDist = 0, bestPoint = null;
-  for (let x = minX; x <= maxX; x += cellSize) {
-    for (let y = minY; y <= maxY; y += cellSize) {
-      if (pointInPolygon([x, y], coordinates)) {
-        const dist = pointToPolygonDistance([x, y], coordinates);
-        if (dist > bestDist) { bestDist = dist; bestPoint = [x, y]; }
-      }
-    }
+  let sumX = 0, sumY = 0;
+  for (const [x, y] of ring) {
+    sumX += x;
+    sumY += y;
   }
-  if (!bestPoint) return null;
-  const fineSize = cellSize / 4;
-  for (let x = bestPoint[0] - cellSize; x <= bestPoint[0] + cellSize; x += fineSize) {
-    for (let y = bestPoint[1] - cellSize; y <= bestPoint[1] + cellSize; y += fineSize) {
-      if (pointInPolygon([x, y], coordinates)) {
-        const dist = pointToPolygonDistance([x, y], coordinates);
-        if (dist > bestDist) { bestDist = dist; bestPoint = [x, y]; }
-      }
-    }
-  }
-  return [bestPoint[1], bestPoint[0]];
+  const centroid = [sumY / ring.length, sumX / ring.length];
+  return centroid;
 }
 
 // フィーチャのラベル位置を取得

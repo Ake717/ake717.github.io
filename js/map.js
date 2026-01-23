@@ -27,7 +27,6 @@ function saveState() {
       settings: {
         kmlMode: document.getElementById('kmlMode').checked,
         showAddress: document.getElementById('showAddress').checked,
-        renderOffscreen: document.getElementById('renderOffscreen').checked,
         autoMove: document.getElementById('autoMove').checked,
         simplify: document.getElementById('simplify').checked,
         tolerance: document.getElementById('tolerance').value,
@@ -69,7 +68,6 @@ function loadState() {
     if (stateData.settings) {
       document.getElementById('kmlMode').checked = stateData.settings.kmlMode || false;
       document.getElementById('showAddress').checked = stateData.settings.showAddress || false;
-      document.getElementById('renderOffscreen').checked = stateData.settings.renderOffscreen !== undefined ? stateData.settings.renderOffscreen : true;
       document.getElementById('autoMove').checked = stateData.settings.autoMove !== undefined ? stateData.settings.autoMove : CONFIG.AUTO_MOVE_TO_NEW_FEATURES;
       document.getElementById('simplify').checked = stateData.settings.simplify || false;
       document.getElementById('tolerance').value = stateData.settings.tolerance || '0.0001';
@@ -89,14 +87,10 @@ function loadState() {
 
 // 地図を初期化
 function initMap() {
-  const renderOffscreen = document.getElementById('renderOffscreen').checked;
-  const renderer = renderOffscreen ? L.canvas({ padding: 1 }) : null;
-
   state.map = L.map('map', {
     zoomControl: true, // ズームコントロールを有効にする
     zoomSnap: 0.1,
-    zoomDelta: 0.25,
-    renderer: renderer
+    zoomDelta: 0.25
   }).setView(INITIAL_VIEW.center, INITIAL_VIEW.zoom);
 
   // ズームコントロールパネルを左下に配置

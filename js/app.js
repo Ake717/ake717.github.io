@@ -124,7 +124,6 @@ function clearAllDataSources() {
     { id: 'title', value: '' },
     { id: 'tolerance', value: '0.0001' },
     { id: 'showAddress', checked: false },
-    { id: 'renderOffscreen', checked: true },
     { id: 'autoMove', checked: true },
     { id: 'kmlMode', checked: false },
     { id: 'simplify', checked: false }
@@ -171,6 +170,35 @@ function handleImportKml() {
   };
 }
 
+// TXTまたはJSONファイルをインポート
+function handleImportTxt() {
+  const fileInput = document.getElementById('txtFileInput');
+  fileInput.click();
+
+  fileInput.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    try {
+      const content = await file.text();
+      
+      // loadAllDataSourcesで地図にフィーチャーが読み込まれるのを待つ
+      // （ファイル処理前にフィーチャーが必要）
+      await loadAllDataSources();
+
+      // ファイルの内容を解析してフィーチャーを自動選択
+      processAndSelectFeaturesFromFile(content, file.name);
+      
+      showMessage(`File "${file.name}" processed`);
+    } catch (error) {
+      console.error('Error importing file:', error);
+      showMessage('Failed to load file', true);
+    } finally {
+      fileInput.value = '';
+    }
+  };
+}
+
 // アプリケーションを初期化
 function init() {
   console.log('Initializing TopoJSON Viewer...');
@@ -186,15 +214,9 @@ function init() {
     { id: 'search', event: 'keypress', handler: e => e.key === 'Enter' && searchAddress() },
     { id: 'exportKmlBtn', event: 'click', handler: exportKml },
     { id: 'importKmlBtn', event: 'click', handler: handleImportKml },
+    { id: 'exportTxtBtn', event: 'click', handler: exportTxt },
+    { id: 'importTxtBtn', event: 'click', handler: handleImportTxt },
     { id: 'showAddress', event: 'change', handler: toggleAddressDisplay },
-    { id: 'renderOffscreen', event: 'change', handler: (e) => {
-      if (confirm('この設定を変更すると、現在表示されている地図がクリアされます。\nデータを再読み込みする必要がありますが、よろしいですか？')) {
-        saveState();
-        recreateMap();
-      } else {
-        e.target.checked = !e.target.checked; // チェックを元に戻す
-      }
-    }},
     { id: 'autoMove', event: 'change', handler: saveState },
     { id: 'kmlMode', event: 'change', handler: saveState },
     { id: 'simplify', event: 'change', handler: () => { saveState(); loadAllDataSources(); } },
