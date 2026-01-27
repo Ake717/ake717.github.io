@@ -1,5 +1,32 @@
+/**
+ * 地図状態管理モジュール
+ * @module MapState
+ */
+
 const INITIAL_VIEW = { center: [36.2, 138.3], zoom: 5 };
 
+/**
+ * アプリケーションのグローバル状態
+ * @typedef {Object} ApplicationState
+ * @property {L.Map|null} map - Leaflet地図インスタンス
+ * @property {Map<string, L.LayerGroup>} layers - データソースIDとレイヤーグループのマッピング
+ * @property {Array<Object>} dataSources - データソース配列
+ * @property {Map<string, FeatureData>} featureData - フィーチャデータのマッピング
+ * @property {Set<L.Layer>} selectedLayers - 選択されたレイヤーのセット
+ * @property {L.Marker|null} marker - 現在のマーカー
+ * @property {Map<string, L.Marker>} addressLabels - 住所ラベルのマッピング
+ * @property {Map<string, L.Marker>} hiddenAddressLabels - 非表示住所ラベルのマッピング
+ * @property {L.Marker|null} currentHoverLabel - 現在ホバー中のラベル
+ * @property {boolean} isCtrlPressed - Ctrlキーが押されているか
+ * @property {L.Layer|null} currentHoverLayer - 現在ホバー中のレイヤー
+ * @property {Set<string>} persistedSelectedFeatures - 永続化された選択フィーチャID
+ * @property {string} sessionId - セッションID
+ * @property {boolean} hideUnselected - 非選択フィーチャを非表示にするか
+ */
+
+/**
+ * @type {ApplicationState}
+ */
 const state = {
   map: null,
   layers: new Map(), // source.id -> layerGroup
@@ -13,7 +40,8 @@ const state = {
   isCtrlPressed: false,
   currentHoverLayer: null,
   persistedSelectedFeatures: new Set(),
-  sessionId: Date.now() + '_' + Math.random().toString(36).substr(2, 9)
+  sessionId: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+  hideUnselected: false
 };
 function saveState() {
   try {
@@ -28,8 +56,6 @@ function saveState() {
         kmlMode: document.getElementById('kmlMode').checked,
         showAddress: document.getElementById('showAddress').checked,
         autoMove: document.getElementById('autoMove').checked,
-        simplify: document.getElementById('simplify').checked,
-        tolerance: document.getElementById('tolerance').value,
         title: document.getElementById('title').value
       },
       sessionId: state.sessionId,
@@ -69,8 +95,6 @@ function loadState() {
       document.getElementById('kmlMode').checked = stateData.settings.kmlMode || false;
       document.getElementById('showAddress').checked = stateData.settings.showAddress || false;
       document.getElementById('autoMove').checked = stateData.settings.autoMove !== undefined ? stateData.settings.autoMove : CONFIG.AUTO_MOVE_TO_NEW_FEATURES;
-      document.getElementById('simplify').checked = stateData.settings.simplify || false;
-      document.getElementById('tolerance').value = stateData.settings.tolerance || '0.0001';
       document.getElementById('title').value = stateData.settings.title || '';
       if (stateData.settings.title) {
         document.title = stateData.settings.title;
@@ -85,19 +109,47 @@ function loadState() {
   }
 }
 
-// 地図を初期化
+/**
+ * 地図を初期化します
+ * @returns {void}
+ */
 function initMap() {
-  state.map = L.map('map', {
-    zoomControl: true, // ズームコントロールを有効にする
-    zoomSnap: 0.1,
-    zoomDelta: 0.25
-  }).setView(INITIAL_VIEW.center, INITIAL_VIEW.zoom);
+  try {
+    // 地図オプションの設定
+    const mapOptions = {
+      zoomControl: true,
+      zoomSnap: 0.1,
+      zoomDelta: 0.25,
+      preferCanvas: true,
+      center: INITIAL_VIEW.center,
+      zoom: INITIAL_VIEW.zoom
+    };
 
-  // ズームコントロールパネルを左下に配置
-  state.map.zoomControl.setPosition('bottomright');
+    // 地図インスタンスの作成
+    state.map = L.map('map', mapOptions);
 
-  L.tileLayer(CONFIG.TILE_LAYER_URL, { attribution: CONFIG.TILE_LAYER_ATTRIBUTION }).addTo(state.map);
+    if (!state.map) {
+      throw new Error('Failed to create map instance');
+    }
+
+    // ズームコントロールの位置設定
+    state.map.zoomControl.setPosition('bottomright');
+
+    // タイルレイヤーの追加
+    const tileLayer = L.tileLayer(CONFIG.TILE_LAYER_URL, {
+      attribution: CONFIG.TILE_LAYER_ATTRIBUTION
+    });
+
+    tileLayer.addTo(state.map);
+
+
+    console.log('Map initialized successfully');
+  } catch (error) {
+    console.error('Error initializing map:', error);
+    showMessage('地図の初期化に失敗しました', true);
+  }
 }
+
 
 // 地図を再生成
 function recreateMap() {
@@ -265,9 +317,54 @@ function toggleSelect(layer, shouldSave = true) {
     }
   }
 
+  // 選択状態が変更されたらレイヤーの可視性を更新
+  if (kmlMode && document.getElementById('hideUnselected').checked) {
+    updateLayerVisibility();
+  }
+
   if (shouldSave) {
     saveState();
   }
+}
+
+// レイヤーの可視性を管理（Hide Unselected機能）
+function updateLayerVisibility() {
+  const hideUnselected = document.getElementById('hideUnselected').checked;
+  const kmlMode = document.getElementById('kmlMode').checked;
+
+  if (!kmlMode || !hideUnselected) {
+    // 通常モードまたはHide Unselectedがオフの場合はすべて表示
+    state.layers.forEach((layerGroup, sourceId) => {
+      layerGroup.eachLayer(layer => {
+        if (!layer._isHidden) {
+          state.map.addLayer(layer);
+          layer._isHidden = false;
+        }
+      });
+    });
+    return;
+  }
+
+  // Hide Unselectedが有効な場合
+  state.layers.forEach((layerGroup, sourceId) => {
+    layerGroup.eachLayer(layer => {
+      const isSelected = state.selectedLayers.has(layer);
+
+      if (isSelected) {
+        // 選択されているレイヤーは表示
+        if (!layer._isHidden) {
+          state.map.addLayer(layer);
+          layer._isHidden = false;
+        }
+      } else {
+        // 選択されていないレイヤーは非表示
+        if (!layer._isHidden) {
+          state.map.removeLayer(layer);
+          layer._isHidden = true;
+        }
+      }
+    });
+  });
 }
 
 // すべてをクリア
@@ -277,6 +374,9 @@ async function clearAll() {
     try {
       // まずクリアフラグを設定
       localStorage.setItem('clearAllFlag', 'true');
+
+      // KMLキャッシュを明示的にクリア
+      localStorage.removeItem('kmlCache');
 
       // すべてのストレージをクリア (Service Workerの登録解除とキャッシュクリアを含む)
       await clearBrowserStorage();

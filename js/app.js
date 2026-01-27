@@ -32,22 +32,17 @@ async function loadAllDataSources() {
     }
   }
 
-  const simplify = document.getElementById('simplify').checked;
-  const tolerance = parseFloat(document.getElementById('tolerance').value) || 0;
-
   // 新しく追加されたレイヤーの境界を追跡
   const newLayerBounds = [];
 
   // 新規データソースのみを読み込んでマップに追加
   for (const source of newDataSources) {
     try {
-      let geoJson = await source.load();
-      if (simplify && tolerance > 0) {
-        geoJson = simplifyGeo(geoJson, tolerance);
-      }
+      const geoJson = await source.load();
       const layerGroup = L.geoJSON(geoJson, {
         style: { color: source.color, weight: source.isKml ? 2 : 1, opacity: 0.7, fillOpacity: 0.15 },
-        onEachFeature: (feature, layer) => setupFeatureEvents(feature, layer, source)
+        onEachFeature: (feature, layer) => setupFeatureEvents(feature, layer, source),
+        renderer: L.canvas({ padding: document.getElementById('alwaysShowFeatures')?.checked ? 1.0 : 0.1 })
       }).addTo(state.map);
       state.layers.set(source.id, layerGroup);
 
@@ -122,11 +117,10 @@ function clearAllDataSources() {
   const controlsToReset = [
     { id: 'search', value: '' },
     { id: 'title', value: '' },
-    { id: 'tolerance', value: '0.0001' },
     { id: 'showAddress', checked: false },
     { id: 'autoMove', checked: true },
     { id: 'kmlMode', checked: false },
-    { id: 'simplify', checked: false }
+    { id: 'alwaysShowFeatures', checked: false }
   ];
 
   controlsToReset.forEach(({ id, value, checked }) => {
@@ -147,6 +141,39 @@ function clearAllDataSources() {
   saveState();
 }
 
+// KMLデータソースを直接ロードしてマップに表示
+async function loadKmlSourceDirectly(source) {
+  try {
+    // KMLデータをロード
+    const geoJson = await source.load();
+
+    // GeoJSONをマップに追加
+    const layerGroup = L.geoJSON(geoJson, {
+      style: { color: source.color, weight: source.isKml ? 2 : 1, opacity: 0.7, fillOpacity: 0.15 },
+      onEachFeature: (feature, layer) => setupFeatureEvents(feature, layer, source),
+      renderer: L.canvas({ padding: document.getElementById('alwaysShowFeatures')?.checked ? 1.0 : 0.1 })
+    }).addTo(state.map);
+    
+    // レイヤーを状態に保存
+    state.layers.set(source.id, layerGroup);
+
+    // 自動移動が有効な場合は新しいフィーチャーの位置に移動
+    const autoMoveEnabled = document.getElementById('autoMove')?.checked ?? CONFIG.AUTO_MOVE_TO_NEW_FEATURES;
+    if (autoMoveEnabled && layerGroup.getBounds().isValid()) {
+      try {
+        state.map.fitBounds(layerGroup.getBounds(), { padding: [20, 20] });
+      } catch (e) {
+        console.error('Failed to move to new KML features:', e);
+      }
+    }
+
+    console.log(`KML source "${source.name}" loaded directly to map`);
+  } catch (error) {
+    console.error('Error loading KML source directly:', error);
+    throw error;
+  }
+}
+
 // KMLファイルをインポート
 function handleImportKml() {
   const fileInput = document.getElementById('kmlFileInput');
@@ -157,13 +184,22 @@ function handleImportKml() {
     if (!file) return;
 
     try {
+      // KMLファイルを読み込み、データソースを作成
       const newSource = await loadKmlFromFile(file);
+      
+      // 新しいKMLデータソースを状態に追加
       state.dataSources.push(newSource);
+      
+      // UIにデータソース行を追加
       addDataSourceRow(newSource);
-      await loadAllDataSources();
+      
+      // KMLデータを直接ロードしてマップに表示
+      await loadKmlSourceDirectly(newSource);
+      
       showMessage(`KML file "${file.name}" loaded successfully`);
     } catch (error) {
-      // エラーメッセージはloadKmlFromFile内で表示される
+      console.error('KML import error:', error);
+      showMessage('KMLファイルのインポートに失敗しました', true);
     } finally {
       fileInput.value = '';
     }
@@ -209,7 +245,6 @@ function init() {
   const elements = [
     { id: 'loadBtn', event: 'click', handler: loadAllDataSources },
     { id: 'clearBtn', event: 'click', handler: confirmClear },
-    { id: 'shareBtn', event: 'click', handler: shareUrl },
     { id: 'searchBtn', event: 'click', handler: searchAddress },
     { id: 'search', event: 'keypress', handler: e => e.key === 'Enter' && searchAddress() },
     { id: 'exportKmlBtn', event: 'click', handler: exportKml },
@@ -219,8 +254,26 @@ function init() {
     { id: 'showAddress', event: 'change', handler: toggleAddressDisplay },
     { id: 'autoMove', event: 'change', handler: saveState },
     { id: 'kmlMode', event: 'change', handler: saveState },
-    { id: 'simplify', event: 'change', handler: () => { saveState(); loadAllDataSources(); } },
-    { id: 'tolerance', event: 'input', handler: () => { saveState(); debouncedLoad(); } },
+    { id: 'hideUnselected', event: 'change', handler: () => {
+      const kmlMode = document.getElementById('kmlMode').checked;
+      const hideUnselected = document.getElementById('hideUnselected').checked;
+      
+      if (kmlMode && hideUnselected) {
+        updateLayerVisibility();
+      } else {
+        // Hide Unselectedがオフになったらすべてのレイヤーを表示
+        state.layers.forEach((layerGroup, sourceId) => {
+          layerGroup.eachLayer(layer => {
+            if (layer._isHidden) {
+              state.map.addLayer(layer);
+              layer._isHidden = false;
+            }
+          });
+        });
+      }
+      saveState();
+    }},
+    { id: 'alwaysShowFeatures', event: 'change', handler: saveState },
     { id: 'title', event: 'input', handler: () => {
       document.title = document.getElementById('title').value || 'TopoJSON Viewer';
       saveState();

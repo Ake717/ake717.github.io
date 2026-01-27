@@ -1,5 +1,18 @@
-// URLデータソースを作成
+/**
+ * URLデータソースを作成します
+ * @param {string} url - データソースのURL
+ * @param {string} color - レイヤーの色
+ * @returns {Object} URLデータソースオブジェクト
+ */
 function createUrlSource(url, color) {
+  if (!url || typeof url !== 'string') {
+    throw new Error('Invalid URL provided');
+  }
+
+  if (!color || typeof color !== 'string') {
+    throw new Error('Invalid color provided');
+  }
+
   return {
     type: 'url',
     id: url,
@@ -10,13 +23,30 @@ function createUrlSource(url, color) {
     async load() {
       try {
         const res = await fetch(this.url);
-        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+        if (!res.ok) {
+          throw new Error(`HTTP error! status: ${res.status} - ${res.statusText}`);
+        }
+
+        const contentType = res.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+          throw new Error('Invalid content type. Expected JSON');
+        }
+
         const topo = await res.json();
+
+        if (!topo || !topo.objects) {
+          throw new Error('Invalid TopoJSON format: missing objects property');
+        }
+
         const key = Object.keys(topo.objects)[0];
+        if (!key) {
+          throw new Error('No objects found in TopoJSON');
+        }
+
         return topojson.feature(topo, topo.objects[key]);
       } catch (e) {
-        console.error(e);
-        showMessage('Load error: ' + this.url, true);
+        console.error('URL source load error:', e);
+        showMessage(`Load error: ${this.url} - ${e.message}`, true);
         throw e;
       }
     }
@@ -27,7 +57,7 @@ function createUrlSource(url, color) {
 function createFileSource(file, color) {
   return {
     type: 'file',
-    id: file.name + '_' + file.lastModified,
+    id: `${file.name}_${file.lastModified}`,
     file,
     color,
     isKml: false,
@@ -48,7 +78,7 @@ function createFileSource(file, color) {
         }
       } catch (e) {
         console.error(e);
-        showMessage('Load error: ' + this.file.name, true);
+        showMessage(`Load error: ${this.file.name}`, true);
         throw e;
       }
     }
@@ -80,24 +110,13 @@ function createFileSourceFromContent(content, fileName, color, id) {
         }
       } catch (e) {
         console.error(e);
-        showMessage('Load error: ' + this.fileName, true);
+        showMessage(`Load error: ${this.fileName}`, true);
         throw e;
       }
     }
   };
 }
 
-// ジオメトリを簡略化
-function simplifyGeo(geo, tolerance) {
-  const simpRing = ring => simplify(ring.map(([x, y]) => ({ x, y })), tolerance, true).map(p => [p.x, p.y]);
-  const simpPoly = poly => poly.map(simpRing);
-  const simpGeom = g => {
-    if (g.type === 'Polygon') return { ...g, coordinates: simpPoly(g.coordinates) };
-    if (g.type === 'MultiPolygon') return { ...g, coordinates: g.coordinates.map(simpPoly) };
-    return g;
-  };
-  return { ...geo, features: geo.features.map(f => ({ ...f, geometry: simpGeom(f.geometry) })) };
-}
 
 // ポリゴン内の点をチェック
 function pointInPolygon(point, coordinates) {
@@ -134,11 +153,11 @@ function pointToPolygonDistance(point, coordinates) {
     for (let i = 0; i < ring.length - 1; i++) {
       const [x1, y1] = ring[i];
       const [x2, y2] = ring[i + 1];
-      let dx = x2 - x1, dy = y2 - y1;
+      const dx = x2 - x1, dy = y2 - y1;
       let t = ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy);
       t = Math.max(0, Math.min(1, t));
-      let closestX = x1 + t * dx;
-      let closestY = y1 + t * dy;
+      const closestX = x1 + t * dx;
+      const closestY = y1 + t * dy;
       minDistSq = Math.min(minDistSq, (px - closestX) ** 2 + (py - closestY) ** 2);
     }
   }
@@ -148,12 +167,12 @@ function pointToPolygonDistance(point, coordinates) {
 // ポリゴンのラベル位置を取得
 function getPolygonLabelPosition(coordinates) {
   if (!coordinates?.[0] || coordinates[0].length < 3) return null;
-  
+
   try {
     // Polylabelでポリゴンの最適なラベル位置を計算
     // coordinates形式は[lng, lat]なので、polylabelに直接渡す
     const labelPoint = polylabel(coordinates, 1.0);
-    
+
     if (labelPoint && labelPoint.length === 2) {
       // polylabelは[lng, lat]形式で返すため、Leafletの[lat, lng]に変換
       return [labelPoint[1], labelPoint[0]];
@@ -161,7 +180,7 @@ function getPolygonLabelPosition(coordinates) {
   } catch (e) {
     console.warn('Polylabel calculation failed:', e);
   }
-  
+
   // Polylabel失敗時はフォールバック：簡単な重心計算
   const ring = coordinates[0];
   let sumX = 0, sumY = 0;
@@ -215,7 +234,7 @@ async function loadKmlFromFile(file) {
         resolve(createKmlSource(id, name, color));
       } catch (error) {
         console.error('KML parse error:', error);
-        showMessage('KMLファイルの読み込みに失敗しました: ' + error.message, true);
+        showMessage(`KMLファイルの読み込みに失敗しました: ${error.message}`, true);
         reject(error);
       }
     };
@@ -240,7 +259,7 @@ function createKmlSource(id, name, color) {
         return cachedData.geoJson;
       }
       throw new Error(`KML data with id "${this.id}" not found in cache.`);
-    },
+    }
   };
 }
 
@@ -445,14 +464,11 @@ function exportKml() {
       return;
     }
 
-    const simplify = document.getElementById('simplify').checked;
-    const tolerance = parseFloat(document.getElementById('tolerance').value) || 0;
-
     const coords2kml = coords => coords.map(c => `${c[0]},${c[1]},0`).join(' ');
     const makePoly = (exterior, holes = []) => {
       let p = `<Polygon><outerBoundaryIs><LinearRing><coordinates>${coords2kml(exterior)}</coordinates></LinearRing></outerBoundaryIs>`;
       holes.forEach(h => p += `<innerBoundaryIs><LinearRing><coordinates>${coords2kml(h)}</coordinates></LinearRing></innerBoundaryIs>`);
-      return p + '</Polygon>';
+      return `${p}</Polygon>`;
     };
 
     let kmlContent = '';
@@ -469,12 +485,7 @@ function exportKml() {
         return;
       }
 
-      let { feature, name } = data;
-
-      if (simplify && tolerance > 0) {
-        const simplifiedGeo = simplifyGeo({ type: 'FeatureCollection', features: [feature] }, tolerance);
-        feature = simplifiedGeo.features[0];
-      }
+      const { feature, name } = data;
 
       const geom = feature.geometry;
 
@@ -512,7 +523,7 @@ function exportKml() {
 
     const a = document.createElement('a');
     a.href = url;
-    a.download = (document.getElementById('title').value || 'features') + '.kml';
+    a.download = `${document.getElementById('title').value || 'features'}.kml`;
 
     console.log('Download filename:', a.download);
 
@@ -527,6 +538,6 @@ function exportKml() {
 
   } catch (error) {
     console.error('Export KML error:', error);
-    showMessage('KMLエクスポート中にエラーが発生しました: ' + error.message, true);
+    showMessage(`KMLエクスポート中にエラーが発生しました: ${error.message}`, true);
   }
 }

@@ -1,5 +1,16 @@
+/**
+ * メモキャッシュ管理モジュール
+ * @module MemoCache
+ */
+
 const memoCache = new Map();
 
+/**
+ * 関数の結果をキャッシュするメモ化関数
+ * @param {Function} fn - メモ化する関数
+ * @param {Function} [keyFn] - キー生成関数
+ * @returns {Function} メモ化された関数
+ */
 function memoize(fn, keyFn = (...args) => JSON.stringify(args)) {
   return (...args) => {
     const key = keyFn(...args);
@@ -12,6 +23,10 @@ function memoize(fn, keyFn = (...args) => JSON.stringify(args)) {
   };
 }
 
+/**
+ * メモキャッシュをクリアします
+ * @returns {void}
+ */
 function clearMemoCache() {
   memoCache.clear();
 }
@@ -26,8 +41,8 @@ function addDataSourceRow(source) {
   const inputHtml = source.type === 'url'
     ? `<input type="text" value="${source.url || ''}" placeholder="TopoJSON URL" style="flex: 1;">`
     : source.type === 'file'
-    ? `<span class="file-name" title="${source.name}">${source.name}</span><input type="file" class="file-upload" accept=".txt,.json,.geojson" style="display:none;">`
-    : `<span class="kml-name">${source.name}</span>`;
+      ? `<span class="file-name" title="${source.name}">${source.name}</span><input type="file" class="file-upload" accept=".txt,.json,.geojson" style="display:none;">`
+      : `<span class="kml-name">${source.name}</span>`;
 
   row.innerHTML = `
     <button class="add">+</button>
@@ -78,15 +93,15 @@ function addDataSourceRow(source) {
   } else if (source.type === 'file') {
     const fileUpload = row.querySelector('.file-upload');
     const fileName = row.querySelector('.file-name');
-    
+
     fileUpload.addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (file) {
-        const fileId = file.name + '_' + file.lastModified;
+        const fileId = `${file.name}_${file.lastModified}`;
         row.dataset.id = fileId;
         fileName.textContent = file.name;
         fileName.title = file.name;
-        
+
         // ファイルをメモリに保存
         row.dataset.file = JSON.stringify({
           name: file.name,
@@ -94,7 +109,7 @@ function addDataSourceRow(source) {
           type: file.type,
           lastModified: file.lastModified
         });
-        
+
         // ファイルの内容を保存
         file.text().then(content => {
           row.dataset.fileContent = content;
@@ -106,7 +121,7 @@ function addDataSourceRow(source) {
         });
       }
     });
-    
+
     fileName.addEventListener('click', () => {
       fileUpload.click();
     });
@@ -213,7 +228,7 @@ function showAddressLabel(layer) {
   const data = state.featureData.get(layerId);
   if (!data) return;
 
-  let center = getFeatureLabelPosition(data.feature) || layer.getBounds().getCenter();
+  const center = getFeatureLabelPosition(data.feature) || layer.getBounds().getCenter();
   const fontSize = state.map.getZoom() / 1.3;
   const labelMarker = L.marker(center, { icon: createLabelIcon(data.name, fontSize) }).addTo(state.map);
   state.addressLabels.set(layerId, labelMarker);
@@ -234,6 +249,7 @@ function hideAddressLabel(layer) {
 function toggleAddressDisplay() {
   const showAddress = document.getElementById('showAddress').checked;
   const kmlMode = document.getElementById('kmlMode').checked;
+  const hideUnselected = document.getElementById('hideUnselected').checked;
 
   // 既存のラベルをすべてクリア
   state.addressLabels.forEach(marker => state.map.removeLayer(marker));
@@ -243,13 +259,23 @@ function toggleAddressDisplay() {
     const layersToShow = new Set();
 
     if (kmlMode) {
-      // KMLモードの場合、選択されたKMLレイヤーのみ表示
-      state.selectedLayers.forEach(layer => {
-        const data = state.featureData.get(L.Util.stamp(layer));
-        if (data) {
-          layersToShow.add(layer);
-        }
-      });
+      // KMLモードの場合
+      if (hideUnselected) {
+        // Hide Unselectedが有効な場合は選択されたレイヤーのみ表示
+        state.selectedLayers.forEach(layer => {
+          const data = state.featureData.get(L.Util.stamp(layer));
+          if (data) {
+            layersToShow.add(layer);
+          }
+        });
+      } else {
+        // Hide Unselectedが無効な場合はすべてのレイヤーを表示
+        state.featureData.forEach(data => {
+          if (data.layer) {
+            layersToShow.add(data.layer);
+          }
+        });
+      }
     } else {
       // 通常モードの場合、すべてのフィーチャレイヤーを表示
       state.featureData.forEach(data => {
@@ -455,12 +481,12 @@ function processAndSelectFeaturesFromFile(content, fileName) {
   // ファイル形式を判定（JSON or TXT）
   let lines = [];
   const lowerFileName = fileName.toLowerCase();
-  
+
   try {
     // JSON形式の判定
     if (lowerFileName.endsWith('.json') || content.trim().startsWith('{') || content.trim().startsWith('[')) {
       const jsonData = JSON.parse(content);
-      
+
       // JSON形式：features配列を抽出
       if (Array.isArray(jsonData)) {
         lines = jsonData;
@@ -536,19 +562,19 @@ function processAndSelectFeaturesFromFile(content, fileName) {
   }
 
   // アラートメッセージを作成
-  let alertMessage = `=== Feature Selection Result ===\n\n`;
+  let alertMessage = '=== Feature Selection Result ===\n\n';
   alertMessage += `Total lines: ${lines.length}\n`;
   alertMessage += `✓ Success: ${successCount}\n`;
   alertMessage += `✗ Failed: ${failureCount}\n`;
-  
+
   if (failureLog.length > 0) {
-    alertMessage += `\n--- Failure Log ---\n`;
+    alertMessage += '\n--- Failure Log ---\n';
     failureLog.forEach(log => {
       alertMessage += `${log}\n`;
     });
   }
 
-  alertMessage += `\n====================================`;
+  alertMessage += '\n====================================';
 
   // アラートで結果を表示
   alert(alertMessage);
@@ -567,20 +593,41 @@ function exportTxt() {
     return;
   }
 
-  // 選択されたフィーチャー名を取得
-  const selectedNames = [];
+  // 選択されたフィーチャー情報を取得（名前とKEY_CODE）
+  const selectedFeatures = [];
   state.selectedLayers.forEach(layer => {
     const layerId = L.Util.stamp(layer);
     const data = state.featureData.get(layerId);
     if (data && data.name) {
-      selectedNames.push(data.name);
+      // KEY_CODEを取得（feature.propertiesから）
+      const keyCode = data.feature?.properties?.KEY_CODE;
+      selectedFeatures.push({
+        name: data.name,
+        keyCode: keyCode || null
+      });
     }
   });
 
-  if (selectedNames.length === 0) {
+  if (selectedFeatures.length === 0) {
     showMessage('No feature names found', true);
     return;
   }
+
+  // KEY_CODEでソート（KEY_CODEがある場合はソート、ない場合は名前でソート）
+  selectedFeatures.sort((a, b) => {
+    // 両方ともKEY_CODEがある場合
+    if (a.keyCode && b.keyCode) {
+      return a.keyCode.localeCompare(b.keyCode, undefined, { numeric: true });
+    }
+    // 片方だけKEY_CODEがある場合
+    if (a.keyCode && !b.keyCode) return -1;
+    if (!a.keyCode && b.keyCode) return 1;
+    // 両方ともKEY_CODEがない場合（名前でソート）
+    return a.name.localeCompare(b.name);
+  });
+
+  // ソート済みの名前配列を作成
+  const selectedNames = selectedFeatures.map(feature => feature.name);
 
   // JSON形式で作成
   const jsonData = {

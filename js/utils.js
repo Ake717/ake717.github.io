@@ -1,86 +1,169 @@
-// 漢数字をアラビア数字に変換
+/**
+ * 漢数字をアラビア数字に変換します
+ * @param {string} s - 変換対象の文字列
+ * @returns {string} 変換後の文字列
+ */
 function convertKanji(s) {
+  if (!s || typeof s !== 'string') {
+    return s;
+  }
+
   return s.replace(/[〇零一壱二弐三参四五六七八九十]+/g, m => {
     let v = 0, n = 0;
     for (const c of m) {
-      if (CONFIG.KANJI_MAP[c] >= 10) { v += (n || 1) * CONFIG.KANJI_MAP[c]; n = 0; }
-      else { n = CONFIG.KANJI_MAP[c]; }
+      if (CONFIG.KANJI_MAP[c] >= 10) {
+        v += (n || 1) * CONFIG.KANJI_MAP[c];
+        n = 0;
+      } else {
+        n = CONFIG.KANJI_MAP[c];
+      }
     }
     return v + n;
   });
 }
 
-// ランダムな色を生成
+/**
+ * ランダムな色を生成します
+ * @returns {string} 16進数カラーコード
+ */
 function randomColor() {
-  return '#' + Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0');
+  return `#${Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0')}`;
 }
 
-// ズームレベルに応じたフォントサイズを計算
+/**
+ * ズームレベルに応じたフォントサイズを計算します
+ * @param {number} zoom - ズームレベル
+ * @returns {number} フォントサイズ
+ */
 function getFontSizeForZoom(zoom) {
+  if (typeof zoom !== 'number' || zoom < 0) {
+    return 2;
+  }
+
   return Math.max(2, Math.min(18, 3 + 14 * Math.pow(Math.max(0, Math.min(1, (zoom - 2) / 16)), 2)));
 }
 
-// XMLエスケープ
+/**
+ * XML特殊文字をエスケープします
+ * @param {string} str - エスケープ対象の文字列
+ * @returns {string} エスケープ済み文字列
+ */
 function escapeXml(str) {
+  if (!str || typeof str !== 'string') {
+    return '';
+  }
+
   const xmlChars = {
-    '<': '&lt;',
-    '>': '&gt;',
-    '&': '&amp;',
-    "'": '&apos;',
-    '"': '&quot;'
+    '<': '<',
+    '>': '>',
+    '&': '&',
+    "'": "'",
+    '"': '"'
   };
   return str.replace(/[<>&'"]/g, c => xmlChars[c]);
 }
 
-// メッセージ表示
+/**
+ * メッセージを表示します
+ * @param {string} text - 表示するテキスト
+ * @param {boolean} [isError=false] - エラーメッセージかどうか
+ * @param {number} [duration=5000] - 表示期間（ミリ秒）
+ * @returns {void}
+ */
 function showMessage(text, isError = false, duration = 5000) {
+  if (!text || typeof text !== 'string') {
+    return;
+  }
+
   const msgEl = document.getElementById('msg');
+  if (!msgEl) {
+    console.warn('Message element not found');
+    return;
+  }
+
   msgEl.textContent = text;
   msgEl.className = `msg${isError ? ' error' : ''}`;
-  
-  // 5秒後に自動的にクリア（エラーメッセージの場合は10秒）
+
+  // クリア期間の設定（エラーメッセージは10秒、通常メッセージは指定された期間）
   const clearDuration = isError ? 10000 : duration;
-  if (msgEl.messageTimeout) clearTimeout(msgEl.messageTimeout);
+
+  // 既存のタイムアウトをクリア
+  if (msgEl.messageTimeout) {
+    clearTimeout(msgEl.messageTimeout);
+  }
+
+  // 自動クリアの設定
   msgEl.messageTimeout = setTimeout(() => {
-    if (msgEl.textContent === text) {  // 他のメッセージで上書きされていない場合のみクリア
+    // 他のメッセージで上書きされていない場合のみクリア
+    if (msgEl.textContent === text) {
       msgEl.textContent = '';
       msgEl.className = 'msg';
     }
   }, clearDuration);
 }
 
-// フィーチャIDを生成
+/**
+ * フィーチャIDを生成します
+ * @param {Object} feature - GeoJSONフィーチャオブジェクト
+ * @param {number} [layerIndex=0] - レイヤーインデックス
+ * @returns {string} フィーチャID
+ */
 function getFeatureId(feature, layerIndex = 0) {
-  const props = feature.properties || {};
+  if (!feature || !feature.properties) {
+    return `feature_${layerIndex}_${Date.now()}_${Math.random()}`;
+  }
+
+  const props = feature.properties;
   const candidates = [
     props.id,
     props.ID,
     props.name,
     props.S_NAME,
     props.N03_004,
-    props.PREF_NAME + '_' + props.CITY_NAME + '_' + props.S_NAME,
+    `${props.PREF_NAME}_${props.CITY_NAME}_${props.S_NAME}`,
     JSON.stringify(feature.geometry.coordinates[0]?.[0])
   ].filter(Boolean);
 
   return candidates[0] || `feature_${layerIndex}_${Date.now()}_${Math.random()}`;
 }
 
-// フィーチャ名を取得
+/**
+ * フィーチャ名を取得します
+ * @param {Object} feature - GeoJSONフィーチャオブジェクト
+ * @returns {string} フィーチャ名
+ */
 function getName(feature) {
-  return convertKanji(feature.properties?.name || feature.properties?.S_NAME || feature.properties?.N03_004 || 'Feature');
+  if (!feature || !feature.properties) {
+    return 'Feature';
+  }
+
+  const name = feature.properties.name ||
+               feature.properties.S_NAME ||
+               feature.properties.N03_004 ||
+               'Feature';
+
+  return convertKanji(name);
 }
 
-// 最初のURL入力欄の色を取得
+/**
+ * 最初のURL入力欄の色を取得します
+ * @returns {string|null} カラーコードまたはnull
+ */
 function getFirstUrlColor() {
   const firstRow = document.querySelector('.url-row');
-  if (firstRow) {
-    const colorInput = firstRow.querySelector('input[type="color"]');
-    return colorInput ? colorInput.value : null;
+  if (!firstRow) {
+    return null;
   }
-  return null;
+
+  const colorInput = firstRow.querySelector('input[type="color"]');
+  return colorInput ? colorInput.value : null;
 }
 
-// 新しい色を生成
+/**
+ * 新しい色を生成します
+ * @param {string} [excludeColor=null] - 除外する色
+ * @returns {string} 新しいカラーコード
+ */
 function generateNewColor(excludeColor = null) {
   let newColor;
   let attempts = 0;
@@ -94,8 +177,21 @@ function generateNewColor(excludeColor = null) {
   return newColor;
 }
 
-// デバウンス関数
+/**
+ * デバウンス関数を生成します
+ * @param {Function} func - デバウンスする関数
+ * @param {number} wait - 待機時間（ミリ秒）
+ * @returns {Function} デバウンスされた関数
+ */
 function debounce(func, wait) {
+  if (typeof func !== 'function') {
+    throw new Error('First argument must be a function');
+  }
+
+  if (typeof wait !== 'number' || wait < 0) {
+    throw new Error('Wait time must be a non-negative number');
+  }
+
   let timeout;
   return function(...args) {
     const context = this;
