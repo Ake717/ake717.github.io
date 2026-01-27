@@ -43,8 +43,23 @@ const state = {
   sessionId: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
   hideUnselected: false
 };
+/**
+ * アプリケーション状態を保存します
+ * @returns {void}
+ */
 function saveState() {
   try {
+    // DOM要素が存在するかチェック
+    const kmlModeCheckbox = document.getElementById('kmlMode');
+    const showAddressCheckbox = document.getElementById('showAddress');
+    const autoMoveCheckbox = document.getElementById('autoMove');
+    const titleInput = document.getElementById('title');
+
+    if (!kmlModeCheckbox || !showAddressCheckbox || !autoMoveCheckbox || !titleInput) {
+      console.warn('DOM elements not ready, skipping saveState');
+      return;
+    }
+
     const stateData = {
       sources: getDataSources(),
       selectedFeatures: Array.from(state.persistedSelectedFeatures),
@@ -53,10 +68,10 @@ function saveState() {
         zoom: state.map.getZoom()
       },
       settings: {
-        kmlMode: document.getElementById('kmlMode').checked,
-        showAddress: document.getElementById('showAddress').checked,
-        autoMove: document.getElementById('autoMove').checked,
-        title: document.getElementById('title').value
+        kmlMode: kmlModeCheckbox.checked,
+        showAddress: showAddressCheckbox.checked,
+        autoMove: autoMoveCheckbox.checked,
+        title: titleInput.value
       },
       sessionId: state.sessionId,
       timestamp: Date.now()
@@ -68,6 +83,10 @@ function saveState() {
   }
 }
 
+/**
+ * アプリケーション状態を復元します
+ * @returns {boolean} 復元が成功したかどうか
+ */
 function loadState() {
   try {
     // クリアフラグが設定されている場合はデータを読み込まない
@@ -91,11 +110,17 @@ function loadState() {
       state.map.setView([stateData.mapView.center.lat, stateData.mapView.center.lng], stateData.mapView.zoom);
     }
 
-    if (stateData.settings) {
-      document.getElementById('kmlMode').checked = stateData.settings.kmlMode || false;
-      document.getElementById('showAddress').checked = stateData.settings.showAddress || false;
-      document.getElementById('autoMove').checked = stateData.settings.autoMove !== undefined ? stateData.settings.autoMove : CONFIG.AUTO_MOVE_TO_NEW_FEATURES;
-      document.getElementById('title').value = stateData.settings.title || '';
+    // DOM要素が存在するかチェック
+    const kmlModeCheckbox = document.getElementById('kmlMode');
+    const showAddressCheckbox = document.getElementById('showAddress');
+    const autoMoveCheckbox = document.getElementById('autoMove');
+    const titleInput = document.getElementById('title');
+
+    if (stateData.settings && kmlModeCheckbox && showAddressCheckbox && autoMoveCheckbox && titleInput) {
+      kmlModeCheckbox.checked = stateData.settings.kmlMode || false;
+      showAddressCheckbox.checked = stateData.settings.showAddress || false;
+      autoMoveCheckbox.checked = stateData.settings.autoMove !== undefined ? stateData.settings.autoMove : CONFIG.AUTO_MOVE_TO_NEW_FEATURES;
+      titleInput.value = stateData.settings.title || '';
       if (stateData.settings.title) {
         document.title = stateData.settings.title;
       }
@@ -255,7 +280,9 @@ function setupFeatureEvents(feature, layer, source) {
   });
 
   layer.on('click', e => {
-    if (document.getElementById('kmlMode').checked && (e.originalEvent.ctrlKey || e.originalEvent.metaKey)) {
+    // DOM要素が存在するかチェック
+    const kmlModeCheckbox = document.getElementById('kmlMode');
+    if (kmlModeCheckbox && kmlModeCheckbox.checked && (e.originalEvent.ctrlKey || e.originalEvent.metaKey)) {
       L.DomEvent.stopPropagation(e);
       toggleSelect(layer);
     }
@@ -284,8 +311,18 @@ function setupFeatureEvents(feature, layer, source) {
 function toggleSelect(layer, shouldSave = true) {
   const layerId = L.Util.stamp(layer);
   const data = state.featureData.get(layerId);
-  const kmlMode = document.getElementById('kmlMode').checked;
-  const showAddress = document.getElementById('showAddress').checked;
+  
+  // DOM要素が存在するかチェック
+  const kmlModeCheckbox = document.getElementById('kmlMode');
+  const showAddressCheckbox = document.getElementById('showAddress');
+  
+  if (!kmlModeCheckbox || !showAddressCheckbox) {
+    console.warn('DOM elements not ready, skipping toggleSelect');
+    return;
+  }
+  
+  const kmlMode = kmlModeCheckbox.checked;
+  const showAddress = showAddressCheckbox.checked;
 
   if (state.selectedLayers.has(layer)) {
     // 選択解除
@@ -329,8 +366,17 @@ function toggleSelect(layer, shouldSave = true) {
 
 // レイヤーの可視性を管理（Hide Unselected機能）
 function updateLayerVisibility() {
-  const hideUnselected = document.getElementById('hideUnselected').checked;
-  const kmlMode = document.getElementById('kmlMode').checked;
+  // DOM要素が存在するかチェック
+  const hideUnselectedCheckbox = document.getElementById('hideUnselected');
+  const kmlModeCheckbox = document.getElementById('kmlMode');
+  
+  if (!hideUnselectedCheckbox || !kmlModeCheckbox) {
+    console.warn('DOM elements not ready, skipping updateLayerVisibility');
+    return;
+  }
+  
+  const hideUnselected = hideUnselectedCheckbox.checked;
+  const kmlMode = kmlModeCheckbox.checked;
 
   if (!kmlMode || !hideUnselected) {
     // 通常モードまたはHide Unselectedがオフの場合はすべて表示
@@ -387,10 +433,12 @@ async function clearAll() {
 
       // UIのデータソース行を完全にクリアし、新しい空の行を1つだけ追加
       const dataSourcesContainer = document.getElementById('data-sources');
-      dataSourcesContainer.innerHTML = '';
-      setTimeout(() => {
-        addDataSourceRow({ type: 'url', url: '', color: randomColor() });
-      }, 10);
+      if (dataSourcesContainer) {
+        dataSourcesContainer.innerHTML = '';
+        setTimeout(() => {
+          addDataSourceRow({ type: 'url', url: '', color: randomColor() });
+        }, 10);
+      }
 
       // ページリロードでアプリケーションを完全に初期状態に戻す
       resetApplicationState();
