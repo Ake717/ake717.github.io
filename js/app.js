@@ -260,7 +260,13 @@ function init() {
     { id: 'importTxtBtn', event: 'click', handler: handleImportTxt },
     { id: 'showAddress', event: 'change', handler: toggleAddressDisplay },
     { id: 'autoMove', event: 'change', handler: saveState },
-    { id: 'kmlMode', event: 'change', handler: saveState },
+    { id: 'kmlMode', event: 'change', handler: () => {
+      if (document.getElementById('showAddress')?.checked) {
+        toggleAddressDisplay(); // 内部で saveState() も呼ぶ
+      } else {
+        saveState();
+      }
+    }},
     { id: 'hideUnselected', event: 'change', handler: () => {
       updateLayerVisibility();
       saveState();

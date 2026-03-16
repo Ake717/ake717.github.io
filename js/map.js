@@ -360,7 +360,7 @@ function toggleSelect(layer, shouldSave = true) {
       fillColor: data.color,
       fillOpacity: 0
     });
-    if (showAddress) {
+    if (showAddress && kmlMode) {
       showAddressLabel(layer);
     }
     if (data) {

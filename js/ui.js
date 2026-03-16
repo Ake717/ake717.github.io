@@ -259,23 +259,12 @@ function toggleAddressDisplay() {
     const layersToShow = new Set();
 
     if (kmlMode) {
-      // KMLモードの場合
-      if (hideUnselected) {
-        // Hide Unselectedが有効な場合は選択されたレイヤーのみ表示
-        state.selectedLayers.forEach(layer => {
-          const data = state.featureData.get(L.Util.stamp(layer));
-          if (data) {
-            layersToShow.add(layer);
-          }
-        });
-      } else {
-        // Hide Unselectedが無効な場合はすべてのレイヤーを表示
-        state.featureData.forEach(data => {
-          if (data.layer) {
-            layersToShow.add(data.layer);
-          }
-        });
-      }
+      // KMLモードの場合は選択されたレイヤーのみ表示
+      state.selectedLayers.forEach(layer => {
+        if (state.featureData.get(L.Util.stamp(layer))) {
+          layersToShow.add(layer);
+        }
+      });
     } else {
       // 通常モードの場合、すべてのフィーチャレイヤーを表示
       state.featureData.forEach(data => {
