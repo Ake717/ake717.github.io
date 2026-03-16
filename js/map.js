@@ -53,6 +53,7 @@ function saveState() {
     const kmlModeCheckbox = document.getElementById('kmlMode');
     const showAddressCheckbox = document.getElementById('showAddress');
     const autoMoveCheckbox = document.getElementById('autoMove');
+    const hatchUnselectedCheckbox = document.getElementById('hatchUnselected');
     const titleInput = document.getElementById('title');
 
     if (!kmlModeCheckbox || !showAddressCheckbox || !autoMoveCheckbox || !titleInput) {
@@ -71,6 +72,7 @@ function saveState() {
         kmlMode: kmlModeCheckbox.checked,
         showAddress: showAddressCheckbox.checked,
         autoMove: autoMoveCheckbox.checked,
+        hatchUnselected: hatchUnselectedCheckbox?.checked || false,
         title: titleInput.value
       },
       sessionId: state.sessionId,
@@ -114,12 +116,14 @@ function loadState() {
     const kmlModeCheckbox = document.getElementById('kmlMode');
     const showAddressCheckbox = document.getElementById('showAddress');
     const autoMoveCheckbox = document.getElementById('autoMove');
+    const hatchUnselectedCheckbox = document.getElementById('hatchUnselected');
     const titleInput = document.getElementById('title');
 
     if (stateData.settings && kmlModeCheckbox && showAddressCheckbox && autoMoveCheckbox && titleInput) {
       kmlModeCheckbox.checked = stateData.settings.kmlMode || false;
       showAddressCheckbox.checked = stateData.settings.showAddress || false;
       autoMoveCheckbox.checked = stateData.settings.autoMove !== undefined ? stateData.settings.autoMove : CONFIG.AUTO_MOVE_TO_NEW_FEATURES;
+      if (hatchUnselectedCheckbox) hatchUnselectedCheckbox.checked = stateData.settings.hatchUnselected || false;
       titleInput.value = stateData.settings.title || '';
       if (stateData.settings.title) {
         document.title = stateData.settings.title;
@@ -294,7 +298,8 @@ function setupFeatureEvents(feature, layer, source) {
       showHoverAddressLabel(layer);
     }
     if (!state.selectedLayers.has(layer)) {
-      layer.setStyle({ fillOpacity: 0.4 });
+      const layerData = state.featureData.get(layerId);
+      layer.setStyle({ fillColor: layerData?.color || '#3388ff', fillOpacity: 0.4 });
     }
   });
 
@@ -302,7 +307,12 @@ function setupFeatureEvents(feature, layer, source) {
     hideHoverAddressLabel();
     state.currentHoverLayer = null;
     if (!state.selectedLayers.has(layer)) {
-      layer.setStyle({ fillOpacity: 0.15 });
+      const layerData = state.featureData.get(layerId);
+      const useHatch = document.getElementById('hatchUnselected')?.checked;
+      layer.setStyle({
+        fillColor: useHatch ? 'url(#kmlHatchPattern)' : (layerData?.color || '#3388ff'),
+        fillOpacity: useHatch ? 1 : 0.15
+      });
     }
   });
 }
@@ -324,13 +334,16 @@ function toggleSelect(layer, shouldSave = true) {
   const kmlMode = kmlModeCheckbox.checked;
   const showAddress = showAddressCheckbox.checked;
 
+  const useHatch = document.getElementById('hatchUnselected')?.checked;
+
   if (state.selectedLayers.has(layer)) {
     // 選択解除
     state.selectedLayers.delete(layer);
     layer.setStyle({
       weight: data.isKml ? 2 : 1,
       opacity: 0.7,
-      fillOpacity: 0.15
+      fillColor: useHatch ? 'url(#kmlHatchPattern)' : data.color,
+      fillOpacity: useHatch ? 1 : 0.15
     });
     if (kmlMode && showAddress) {
       hideAddressLabel(layer);
@@ -344,6 +357,7 @@ function toggleSelect(layer, shouldSave = true) {
     layer.setStyle({
       weight: 3,
       opacity: 1.0,
+      fillColor: data.color,
       fillOpacity: 0
     });
     if (showAddress) {
@@ -411,6 +425,20 @@ function updateLayerVisibility() {
       }
     });
   });
+}
+
+// ハッチングスタイルをすべての未選択レイヤーに適用/解除する
+function updateHatchStyles() {
+  const useHatch = document.getElementById('hatchUnselected')?.checked;
+  state.featureData.forEach((data) => {
+    if (!state.selectedLayers.has(data.layer)) {
+      data.layer.setStyle({
+        fillColor: useHatch ? 'url(#kmlHatchPattern)' : data.color,
+        fillOpacity: useHatch ? 1 : 0.15
+      });
+    }
+  });
+  saveState();
 }
 
 // すべてをクリア

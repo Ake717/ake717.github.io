@@ -42,7 +42,7 @@ async function loadAllDataSources() {
       const layerGroup = L.geoJSON(geoJson, {
         style: { color: source.color, weight: source.isKml ? 2 : 1, opacity: 0.7, fillOpacity: 0.15 },
         onEachFeature: (feature, layer) => setupFeatureEvents(feature, layer, source),
-        renderer: L.canvas({ padding: document.getElementById('alwaysShowFeatures')?.checked ? 1.0 : 0.1 })
+        renderer: L.svg({ padding: document.getElementById('alwaysShowFeatures')?.checked ? 1.0 : 0.1 })
       }).addTo(state.map);
       state.layers.set(source.id, layerGroup);
 
@@ -54,6 +54,9 @@ async function loadAllDataSources() {
       console.error(`Failed to load data source: ${source.name}`, e);
     }
   }
+
+  // ハッチングスタイルを適用
+  updateHatchStyles();
 
   // 新しいフィーチャーが追加された場合、自動でその場所に移動
   const autoMoveEnabled = document.getElementById('autoMove')?.checked ?? CONFIG.AUTO_MOVE_TO_NEW_FEATURES;
@@ -120,6 +123,7 @@ function clearAllDataSources() {
     { id: 'showAddress', checked: false },
     { id: 'autoMove', checked: true },
     { id: 'kmlMode', checked: false },
+    { id: 'hatchUnselected', checked: false },
     { id: 'alwaysShowFeatures', checked: false }
   ];
 
@@ -151,9 +155,9 @@ async function loadKmlSourceDirectly(source) {
     const layerGroup = L.geoJSON(geoJson, {
       style: { color: source.color, weight: source.isKml ? 2 : 1, opacity: 0.7, fillOpacity: 0.15 },
       onEachFeature: (feature, layer) => setupFeatureEvents(feature, layer, source),
-      renderer: L.canvas({ padding: document.getElementById('alwaysShowFeatures')?.checked ? 1.0 : 0.1 })
+      renderer: L.svg({ padding: document.getElementById('alwaysShowFeatures')?.checked ? 1.0 : 0.1 })
     }).addTo(state.map);
-    
+
     // レイヤーを状態に保存
     state.layers.set(source.id, layerGroup);
 
@@ -166,6 +170,9 @@ async function loadKmlSourceDirectly(source) {
         console.error('Failed to move to new KML features:', e);
       }
     }
+
+    // ハッチングスタイルを適用
+    updateHatchStyles();
 
     console.log(`KML source "${source.name}" loaded directly to map`);
   } catch (error) {
@@ -273,6 +280,7 @@ function init() {
       }
       saveState();
     }},
+    { id: 'hatchUnselected', event: 'change', handler: updateHatchStyles },
     { id: 'alwaysShowFeatures', event: 'change', handler: saveState },
     { id: 'title', event: 'input', handler: () => {
       document.title = document.getElementById('title').value || 'TopoJSON Viewer';
@@ -315,5 +323,22 @@ function init() {
   console.log('TopoJSON Viewer initialization completed');
 }
 
+// SVGハッチパターン定義を一度だけドキュメントに注入する
+function injectHatchPatternDefs() {
+  if (document.getElementById('kmlHatchPatternSvg')) return;
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.id = 'kmlHatchPatternSvg';
+  svg.setAttribute('style', 'position:absolute;width:0;height:0;overflow:hidden');
+  svg.innerHTML = `<defs>
+    <pattern id="kmlHatchPattern" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45 0 0)">
+      <line x1="0" y1="0" x2="0" y2="8" stroke="#333" stroke-width="1.5" stroke-opacity="0.45"/>
+    </pattern>
+  </defs>`;
+  document.body.insertBefore(svg, document.body.firstChild);
+}
+
 // DOMが読み込まれたら初期化
-document.addEventListener('DOMContentLoaded', init);
+document.addEventListener('DOMContentLoaded', () => {
+  injectHatchPatternDefs();
+  init();
+});
