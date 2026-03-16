@@ -262,22 +262,7 @@ function init() {
     { id: 'autoMove', event: 'change', handler: saveState },
     { id: 'kmlMode', event: 'change', handler: saveState },
     { id: 'hideUnselected', event: 'change', handler: () => {
-      const kmlMode = document.getElementById('kmlMode').checked;
-      const hideUnselected = document.getElementById('hideUnselected').checked;
-      
-      if (kmlMode && hideUnselected) {
-        updateLayerVisibility();
-      } else {
-        // Hide Unselectedがオフになったらすべてのレイヤーを表示
-        state.layers.forEach((layerGroup, sourceId) => {
-          layerGroup.eachLayer(layer => {
-            if (layer._isHidden) {
-              state.map.addLayer(layer);
-              layer._isHidden = false;
-            }
-          });
-        });
-      }
+      updateLayerVisibility();
       saveState();
     }},
     { id: 'hatchUnselected', event: 'change', handler: updateHatchStyles },

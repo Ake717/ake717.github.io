@@ -380,46 +380,44 @@ function toggleSelect(layer, shouldSave = true) {
 
 // レイヤーの可視性を管理（Hide Unselected機能）
 function updateLayerVisibility() {
-  // DOM要素が存在するかチェック
   const hideUnselectedCheckbox = document.getElementById('hideUnselected');
   const kmlModeCheckbox = document.getElementById('kmlMode');
-  
+
   if (!hideUnselectedCheckbox || !kmlModeCheckbox) {
     console.warn('DOM elements not ready, skipping updateLayerVisibility');
     return;
   }
-  
+
   const hideUnselected = hideUnselectedCheckbox.checked;
   const kmlMode = kmlModeCheckbox.checked;
+  const useHatch = document.getElementById('hatchUnselected')?.checked;
 
-  if (!kmlMode || !hideUnselected) {
-    // 通常モードまたはHide Unselectedがオフの場合はすべて表示
-    state.layers.forEach((layerGroup, sourceId) => {
-      layerGroup.eachLayer(layer => {
-        if (!layer._isHidden) {
-          state.map.addLayer(layer);
-          layer._isHidden = false;
-        }
-      });
-    });
-    return;
-  }
-
-  // Hide Unselectedが有効な場合
-  state.layers.forEach((layerGroup, sourceId) => {
+  state.layers.forEach((layerGroup) => {
     layerGroup.eachLayer(layer => {
       const isSelected = state.selectedLayers.has(layer);
+      const data = state.featureData.get(L.Util.stamp(layer));
 
-      if (isSelected) {
-        // 選択されているレイヤーは表示
-        if (!layer._isHidden) {
-          state.map.addLayer(layer);
+      if (!kmlMode || !hideUnselected || isSelected) {
+        // 表示: 隠れているレイヤーのみスタイル復元
+        if (layer._isHidden) {
+          if (isSelected) {
+            layer.setStyle({ weight: 3, opacity: 1.0, fillColor: data?.color, fillOpacity: 0 });
+          } else {
+            layer.setStyle({
+              weight: data?.isKml ? 2 : 1,
+              opacity: 0.7,
+              fillColor: useHatch ? 'url(#kmlHatchPattern)' : data?.color,
+              fillOpacity: useHatch ? 1 : 0.15
+            });
+          }
+          layer.options.interactive = true;
           layer._isHidden = false;
         }
       } else {
-        // 選択されていないレイヤーは非表示
+        // 非表示: まだ表示中のレイヤーのみ隠す
         if (!layer._isHidden) {
-          state.map.removeLayer(layer);
+          layer.setStyle({ opacity: 0, fillOpacity: 0, weight: 0 });
+          layer.options.interactive = false;
           layer._isHidden = true;
         }
       }
