@@ -9,7 +9,21 @@
   <link rel="stylesheet" href="css/print.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/topojson-client@3"></script>
+  <!-- polylabel はCJS形式のためブラウザ用シムを用意してから読み込む -->
+  <script>
+    window._cjsModule = { exports: {} };
+    window._prevModule = window.module;
+    window._prevExports = window.exports;
+    window.module = window._cjsModule;
+    window.exports = window._cjsModule.exports;
+  </script>
   <script src="https://unpkg.com/polylabel@1.1.0/index.js"></script>
+  <script>
+    window.polylabel = window._cjsModule.exports;
+    window.module = window._prevModule;
+    window.exports = window._prevExports;
+    delete window._cjsModule; delete window._prevModule; delete window._prevExports;
+  </script>
 </head>
 
 <body>
@@ -30,6 +44,7 @@
     <label title="選択されていないフィーチャーを斜線で塗りつぶします。KML Modeで有効。"><input type="checkbox" id="hatchUnselected"> Hatch Unselected</label><br>
     <label title="選択したフィーチャーの住所を表示します。"><input type="checkbox" id="showAddress"> Show Address</label><br>
     <label title="新しいデータを読み込んだ際に、その位置へ自動的に地図を移動します。"><input type="checkbox" id="autoMove"> Auto Move</label><br>
+    <label title="ビューポート外のフィーチャーも常に描画します（大量データでは重くなります）。"><input type="checkbox" id="alwaysShowFeatures"> Always Show</label><br>
     <input id="title" placeholder="Title" style="width:120px;" title="データセットのタイトル（自動KML Mode機能で使用）"><br>
     <button id="importKmlBtn" title="KMLファイルをインポートします。">Import KML</button>
     <input type="file" id="kmlFileInput" accept=".kml" style="display:none">

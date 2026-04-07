@@ -1,4 +1,14 @@
 /**
+ * HTML特殊文字をエスケープします（XSS防止）
+ * @param {string} s - エスケープ対象の文字列
+ * @returns {string} エスケープ済み文字列
+ */
+function escapeHtml(s) {
+  const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+  return String(s).replace(/[&<>"']/g, c => map[c]);
+}
+
+/**
  * 漢数字をアラビア数字に変換します
  * @param {string} s - 変換対象の文字列
  * @returns {string} 変換後の文字列
@@ -8,7 +18,7 @@ function convertKanji(s) {
     return s;
   }
 
-  return s.replace(/[〇零一壱二弐三参四五六七八九十]+/g, m => {
+  return s.replace(/[〇零一壱二弐三参四五六七八九十百千万]+/g, m => {
     let v = 0, n = 0;
     for (const c of m) {
       if (CONFIG.KANJI_MAP[c] >= 10) {
@@ -114,14 +124,20 @@ function getFeatureId(feature, layerIndex = 0) {
   }
 
   const props = feature.properties;
+  const locationKey = `${props.PREF_NAME || ''}_${props.CITY_NAME || ''}_${props.S_NAME || ''}`;
+  // 安定したジオメトリキー（先頭100文字）でランダムIDを回避
+  const geomKey = feature.geometry?.coordinates
+    ? JSON.stringify(feature.geometry.coordinates).slice(0, 100)
+    : null;
+
   const candidates = [
     props.id,
     props.ID,
     props.name,
     props.S_NAME,
     props.N03_004,
-    `${props.PREF_NAME}_${props.CITY_NAME}_${props.S_NAME}`,
-    JSON.stringify(feature.geometry.coordinates[0]?.[0])
+    locationKey !== '__' ? locationKey : null,
+    geomKey
   ].filter(Boolean);
 
   return candidates[0] || `feature_${layerIndex}_${Date.now()}_${Math.random()}`;
@@ -175,6 +191,33 @@ function generateNewColor(excludeColor = null) {
   } while (excludeColor && newColor === excludeColor && attempts < maxAttempts);
 
   return newColor;
+}
+
+/**
+ * スロットル関数を生成します（trailing callあり）
+ * @param {Function} func - スロットルする関数
+ * @param {number} limit - 最小間隔（ミリ秒）
+ * @returns {Function} スロットルされた関数
+ */
+function throttle(func, limit) {
+  let lastCall = 0;
+  let trailingTimeout = null;
+  return function(...args) {
+    const now = Date.now();
+    const remaining = limit - (now - lastCall);
+    if (remaining <= 0) {
+      if (trailingTimeout) { clearTimeout(trailingTimeout); trailingTimeout = null; }
+      lastCall = now;
+      return func.apply(this, args);
+    } else {
+      if (trailingTimeout) clearTimeout(trailingTimeout);
+      trailingTimeout = setTimeout(() => {
+        lastCall = Date.now();
+        trailingTimeout = null;
+        func.apply(this, args);
+      }, remaining);
+    }
+  };
 }
 
 /**

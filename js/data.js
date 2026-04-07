@@ -206,7 +206,8 @@ function getFeatureLabelPosition(feature) {
         for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
           area += (ring[j][0] + ring[i][0]) * (ring[j][1] - ring[i][1]);
         }
-        if ((area /= 2) > maxArea) { maxArea = area; bestPosition = position; }
+        area = Math.abs(area / 2);
+        if (area > maxArea) { maxArea = area; bestPosition = position; }
       }
     }
     return bestPosition;
@@ -227,9 +228,17 @@ async function loadKmlFromFile(file) {
         const name = file.name;
 
         // KMLデータをキャッシュに保存
-        const kmlCache = JSON.parse(localStorage.getItem('kmlCache')) || {};
-        kmlCache[id] = { geoJson, color, name };
-        localStorage.setItem('kmlCache', JSON.stringify(kmlCache));
+        try {
+          const kmlCache = JSON.parse(localStorage.getItem('kmlCache')) || {};
+          kmlCache[id] = { geoJson, color, name };
+          localStorage.setItem('kmlCache', JSON.stringify(kmlCache));
+        } catch (storageError) {
+          if (storageError.name === 'QuotaExceededError') {
+            showMessage('KMLキャッシュの保存に失敗しました: ストレージ容量が不足しています', true);
+          } else {
+            throw storageError;
+          }
+        }
 
         resolve(createKmlSource(id, name, color));
       } catch (error) {

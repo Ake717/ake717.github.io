@@ -1,3 +1,30 @@
+// GeoJSONフィーチャをチャンク単位で非同期追加（メインスレッドのブロック防止）
+async function addGeoJsonInChunks(geoJson, layerOptions, chunkSize = 500) {
+  const layerGroup = L.geoJSON(null, layerOptions);
+  layerGroup.addTo(state.map);
+
+  const features = geoJson.features;
+  if (!features || features.length === 0) {
+    layerGroup.addData(geoJson);
+    return layerGroup;
+  }
+
+  const total = features.length;
+  for (let i = 0; i < total; i += chunkSize) {
+    const chunk = features.slice(i, i + chunkSize);
+    layerGroup.addData({ type: 'FeatureCollection', features: chunk });
+
+    if (total > chunkSize) {
+      const pct = Math.min(100, Math.round((i + chunkSize) / total * 100));
+      showMessage(`読み込み中... ${pct}%`);
+      // ブラウザに描画の機会を与える
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+  }
+
+  return layerGroup;
+}
+
 // すべてのデータソースを読み込む
 async function loadAllDataSources() {
   const sourceData = getDataSources();
@@ -39,11 +66,11 @@ async function loadAllDataSources() {
   for (const source of newDataSources) {
     try {
       const geoJson = await source.load();
-      const layerGroup = L.geoJSON(geoJson, {
+      const layerGroup = await addGeoJsonInChunks(geoJson, {
         style: { color: source.color, weight: source.isKml ? 2 : 1, opacity: 0.7, fillOpacity: 0.15 },
         onEachFeature: (feature, layer) => setupFeatureEvents(feature, layer, source),
-        renderer: L.svg({ padding: document.getElementById('alwaysShowFeatures')?.checked ? 1.0 : 0.1 })
-      }).addTo(state.map);
+        renderer: L.canvas({ padding: document.getElementById('alwaysShowFeatures')?.checked ? 1.0 : 0.1 })
+      });
       state.layers.set(source.id, layerGroup);
 
       // 新しいレイヤーの境界を収集
@@ -72,8 +99,9 @@ async function loadAllDataSources() {
 }
 
 // すべてのデータソースをクリア
-function confirmClear() {
+async function confirmClear() {
   if (confirm('すべてのデータをクリアしますか？')) {
+    await clearBrowserStorage();
     clearAllDataSources();
   }
 }
@@ -91,6 +119,7 @@ function clearAllDataSources() {
   state.addressLabels.forEach(marker => state.map.removeLayer(marker));
   state.addressLabels.clear();
   state.hiddenAddressLabels.clear();
+  state.labelRegistry.clear();
 
   // 選択レイヤーのクリア
   state.selectedLayers.clear();
@@ -151,12 +180,12 @@ async function loadKmlSourceDirectly(source) {
     // KMLデータをロード
     const geoJson = await source.load();
 
-    // GeoJSONをマップに追加
-    const layerGroup = L.geoJSON(geoJson, {
+    // GeoJSONをチャンク単位でマップに追加
+    const layerGroup = await addGeoJsonInChunks(geoJson, {
       style: { color: source.color, weight: source.isKml ? 2 : 1, opacity: 0.7, fillOpacity: 0.15 },
       onEachFeature: (feature, layer) => setupFeatureEvents(feature, layer, source),
       renderer: L.svg({ padding: document.getElementById('alwaysShowFeatures')?.checked ? 1.0 : 0.1 })
-    }).addTo(state.map);
+    });
 
     // レイヤーを状態に保存
     state.layers.set(source.id, layerGroup);
@@ -184,33 +213,35 @@ async function loadKmlSourceDirectly(source) {
 // KMLファイルをインポート
 function handleImportKml() {
   const fileInput = document.getElementById('kmlFileInput');
-  fileInput.click();
+  // 同じファイルを再選択できるよう値をリセットしてからダイアログを開く
+  fileInput.value = '';
 
-  fileInput.onchange = async (e) => {
+  const onFileSelected = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
 
     try {
       // KMLファイルを読み込み、データソースを作成
       const newSource = await loadKmlFromFile(file);
-      
+
       // 新しいKMLデータソースを状態に追加
       state.dataSources.push(newSource);
-      
+
       // UIにデータソース行を追加
       addDataSourceRow(newSource);
-      
+
       // KMLデータを直接ロードしてマップに表示
       await loadKmlSourceDirectly(newSource);
-      
+
       showMessage(`KML file "${file.name}" loaded successfully`);
     } catch (error) {
       console.error('KML import error:', error);
       showMessage('KMLファイルのインポートに失敗しました', true);
-    } finally {
-      fileInput.value = '';
     }
   };
+
+  fileInput.addEventListener('change', onFileSelected, { once: true });
+  fileInput.click();
 }
 
 // TXTまたはJSONファイルをインポート
@@ -289,47 +320,26 @@ function init() {
   setupKeyEvents();
   setupPrint();
 
+  // loadState() 内でclearAllFlagを確認・削除するため、戻り値だけ使う
   const stateLoaded = loadState();
-  const clearFlag = localStorage.getItem('clearAllFlag');
 
-  // クリアフラグが設定されている場合は削除
-  if (clearFlag) {
-    localStorage.removeItem('clearAllFlag');
-  }
-
-  // クリアフラグが設定されていない、かつデータソースがある場合にのみ読み込み
-  if (stateLoaded && getDataSources().length > 0 && !clearFlag) {
+  // データソースがある場合のみ読み込み
+  if (stateLoaded && getDataSources().length > 0) {
     setTimeout(loadAllDataSources, 100);
   }
 
   const dataSourcesContainer = document.getElementById('data-sources');
-  // クリアフラグが設定されていない、かつデータソースがUIにない場合にのみ空の行を追加
-  if (!clearFlag && dataSourcesContainer && dataSourcesContainer.children.length === 0) {
+  if (dataSourcesContainer && dataSourcesContainer.children.length === 0) {
     addDataSourceRow({ type: 'url', url: '', color: randomColor() });
   }
 
   window.addEventListener('beforeunload', saveState);
-  setInterval(saveState, 1000);
+  setInterval(saveState, 5000);
 
   console.log('TopoJSON Viewer initialization completed');
 }
 
-// SVGハッチパターン定義を一度だけドキュメントに注入する
-function injectHatchPatternDefs() {
-  if (document.getElementById('kmlHatchPatternSvg')) return;
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.id = 'kmlHatchPatternSvg';
-  svg.setAttribute('style', 'position:absolute;width:0;height:0;overflow:hidden');
-  svg.innerHTML = `<defs>
-    <pattern id="kmlHatchPattern" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45 0 0)">
-      <line x1="0" y1="0" x2="0" y2="8" stroke="#333" stroke-width="1.5" stroke-opacity="0.45"/>
-    </pattern>
-  </defs>`;
-  document.body.insertBefore(svg, document.body.firstChild);
-}
-
 // DOMが読み込まれたら初期化
 document.addEventListener('DOMContentLoaded', () => {
-  injectHatchPatternDefs();
   init();
 });

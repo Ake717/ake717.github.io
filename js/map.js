@@ -36,6 +36,7 @@ const state = {
   marker: null,
   addressLabels: new Map(),
   hiddenAddressLabels: new Map(),
+  labelRegistry: new Map(),
   currentHoverLabel: null,
   isCtrlPressed: false,
   currentHoverLayer: null,
@@ -62,7 +63,10 @@ function saveState() {
     }
 
     const stateData = {
-      sources: getDataSources(),
+      // fileContentはサイズが大きすぎるためlocalStorageには保存しない
+      sources: getDataSources().map(s =>
+        s.type === 'file' ? { type: s.type, id: s.id, name: s.name, color: s.color } : s
+      ),
       selectedFeatures: Array.from(state.persistedSelectedFeatures),
       mapView: {
         center: state.map.getCenter(),
@@ -73,6 +77,7 @@ function saveState() {
         showAddress: showAddressCheckbox.checked,
         autoMove: autoMoveCheckbox.checked,
         hatchUnselected: hatchUnselectedCheckbox?.checked || false,
+        alwaysShowFeatures: document.getElementById('alwaysShowFeatures')?.checked || false,
         title: titleInput.value
       },
       sessionId: state.sessionId,
@@ -109,7 +114,14 @@ function loadState() {
     state.persistedSelectedFeatures = new Set(stateData.selectedFeatures || []);
 
     if (stateData.mapView) {
-      state.map.setView([stateData.mapView.center.lat, stateData.mapView.center.lng], stateData.mapView.zoom);
+      const lat = parseFloat(stateData.mapView.center?.lat);
+      const lng = parseFloat(stateData.mapView.center?.lng);
+      const zoom = parseInt(stateData.mapView.zoom);
+      if (!isNaN(lat) && !isNaN(lng) && !isNaN(zoom) &&
+          lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180 &&
+          zoom >= 0 && zoom <= 22) {
+        state.map.setView([lat, lng], zoom);
+      }
     }
 
     // DOM要素が存在するかチェック
@@ -124,6 +136,8 @@ function loadState() {
       showAddressCheckbox.checked = stateData.settings.showAddress || false;
       autoMoveCheckbox.checked = stateData.settings.autoMove !== undefined ? stateData.settings.autoMove : CONFIG.AUTO_MOVE_TO_NEW_FEATURES;
       if (hatchUnselectedCheckbox) hatchUnselectedCheckbox.checked = stateData.settings.hatchUnselected || false;
+      const alwaysShowCheckbox = document.getElementById('alwaysShowFeatures');
+      if (alwaysShowCheckbox) alwaysShowCheckbox.checked = stateData.settings.alwaysShowFeatures || false;
       titleInput.value = stateData.settings.title || '';
       if (stateData.settings.title) {
         document.title = stateData.settings.title;
@@ -205,10 +219,16 @@ function updateLayerColor(sourceId, newColor) {
   if (layerGroup) {
     layerGroup.setStyle({ color: newColor });
   }
-  // featureDataの色も更新
+  const useHatch = document.getElementById('hatchUnselected')?.checked;
+  // featureDataの色を更新し、非選択レイヤーのfillColorも即時反映
   state.featureData.forEach(data => {
     if (data.sourceId === sourceId) {
       data.color = newColor;
+      if (!state.selectedLayers.has(data.layer)) {
+        data.layer.setStyle({
+          fillColor: useHatch ? '#888888' : newColor
+        });
+      }
     }
   });
 }
@@ -260,9 +280,12 @@ function restoreSelectedFeatures() {
 
   state.featureData.forEach((data) => {
     if (state.persistedSelectedFeatures.has(data.featureId)) {
-      toggleSelect(data.layer, false);
+      toggleSelect(data.layer, false, true); // 可視性更新はスキップ（バッチ処理）
     }
   });
+
+  // 全フィーチャ復元後に一括で可視性を更新
+  updateLayerVisibility();
 
   console.log(`Restored ${state.selectedLayers.size} selected features`);
 }
@@ -292,7 +315,7 @@ function setupFeatureEvents(feature, layer, source) {
     }
   });
 
-  layer.on('mouseover', (e) => {
+  layer.on('mouseover', throttle((e) => {
     state.currentHoverLayer = layer;
     if (!state.isCtrlPressed) {
       showHoverAddressLabel(layer);
@@ -301,24 +324,24 @@ function setupFeatureEvents(feature, layer, source) {
       const layerData = state.featureData.get(layerId);
       layer.setStyle({ fillColor: layerData?.color || '#3388ff', fillOpacity: 0.4 });
     }
-  });
+  }, 80));
 
-  layer.on('mouseout', () => {
+  layer.on('mouseout', throttle(() => {
     hideHoverAddressLabel();
     state.currentHoverLayer = null;
     if (!state.selectedLayers.has(layer)) {
       const layerData = state.featureData.get(layerId);
       const useHatch = document.getElementById('hatchUnselected')?.checked;
       layer.setStyle({
-        fillColor: useHatch ? 'url(#kmlHatchPattern)' : (layerData?.color || '#3388ff'),
-        fillOpacity: useHatch ? 1 : 0.15
+        fillColor: useHatch ? '#888888' : (layerData?.color || '#3388ff'),
+        fillOpacity: useHatch ? 0.05 : 0.15
       });
     }
-  });
+  }, 80));
 }
 
 // フィーチャの選択を切り替え
-function toggleSelect(layer, shouldSave = true) {
+function toggleSelect(layer, shouldSave = true, skipVisibilityUpdate = false) {
   const layerId = L.Util.stamp(layer);
   const data = state.featureData.get(layerId);
   
@@ -342,8 +365,8 @@ function toggleSelect(layer, shouldSave = true) {
     layer.setStyle({
       weight: data.isKml ? 2 : 1,
       opacity: 0.7,
-      fillColor: useHatch ? 'url(#kmlHatchPattern)' : data.color,
-      fillOpacity: useHatch ? 1 : 0.15
+      fillColor: useHatch ? '#888888' : data.color,
+      fillOpacity: useHatch ? 0.05 : 0.15
     });
     if (kmlMode && showAddress) {
       hideAddressLabel(layer);
@@ -368,8 +391,8 @@ function toggleSelect(layer, shouldSave = true) {
     }
   }
 
-  // 選択状態が変更されたらレイヤーの可視性を更新
-  if (kmlMode && document.getElementById('hideUnselected').checked) {
+  // 選択状態が変更されたらレイヤーの可視性を更新（バッチ処理中はスキップ）
+  if (!skipVisibilityUpdate && kmlMode && document.getElementById('hideUnselected').checked) {
     updateLayerVisibility();
   }
 
@@ -406,8 +429,8 @@ function updateLayerVisibility() {
             layer.setStyle({
               weight: data?.isKml ? 2 : 1,
               opacity: 0.7,
-              fillColor: useHatch ? 'url(#kmlHatchPattern)' : data?.color,
-              fillOpacity: useHatch ? 1 : 0.15
+              fillColor: useHatch ? '#888888' : data?.color,
+              fillOpacity: useHatch ? 0.05 : 0.15
             });
           }
           layer.options.interactive = true;
@@ -425,54 +448,25 @@ function updateLayerVisibility() {
   });
 }
 
-// ハッチングスタイルをすべての未選択レイヤーに適用/解除する
+// ハッチングスタイルをすべての未選択レイヤーに適用/解除する（ビューポート内のみ優先更新）
 function updateHatchStyles() {
   const useHatch = document.getElementById('hatchUnselected')?.checked;
-  state.featureData.forEach((data) => {
-    if (!state.selectedLayers.has(data.layer)) {
-      data.layer.setStyle({
-        fillColor: useHatch ? 'url(#kmlHatchPattern)' : data.color,
-        fillOpacity: useHatch ? 1 : 0.15
-      });
-    }
+  const bounds = state.map?.getBounds().pad(0.5);
+  requestAnimationFrame(() => {
+    state.featureData.forEach((data) => {
+      if (!state.selectedLayers.has(data.layer)) {
+        // ビューポート外のレイヤーはスキップ（getBounds未対応のレイヤーは常に更新）
+        try {
+          if (bounds && data.layer.getBounds && !bounds.intersects(data.layer.getBounds())) return;
+        } catch (_) { /* getBoundsが使えない場合は更新を続行 */ }
+        data.layer.setStyle({
+          fillColor: useHatch ? '#888888' : data.color,
+          fillOpacity: useHatch ? 0.05 : 0.15
+        });
+      }
+    });
   });
   saveState();
-}
-
-// すべてをクリア
-async function clearAll() {
-  if (confirm('すべてのデータをクリアしますか？\n（保存された設定、Cookie、地図データが削除されます）')) {
-    console.log('Starting comprehensive data clear...');
-    try {
-      // まずクリアフラグを設定
-      localStorage.setItem('clearAllFlag', 'true');
-
-      // KMLキャッシュを明示的にクリア
-      localStorage.removeItem('kmlCache');
-
-      // すべてのストレージをクリア (Service Workerの登録解除とキャッシュクリアを含む)
-      await clearBrowserStorage();
-
-      // 内部状態をリセット
-      clearAllDataSources();
-      state.persistedSelectedFeatures.clear();
-
-      // UIのデータソース行を完全にクリアし、新しい空の行を1つだけ追加
-      const dataSourcesContainer = document.getElementById('data-sources');
-      if (dataSourcesContainer) {
-        dataSourcesContainer.innerHTML = '';
-        setTimeout(() => {
-          addDataSourceRow({ type: 'url', url: '', color: randomColor() });
-        }, 10);
-      }
-
-      // ページリロードでアプリケーションを完全に初期状態に戻す
-      resetApplicationState();
-    } catch (e) {
-      console.error('Error during clear operation:', e);
-      showMessage('クリア中にエラーが発生しました', true);
-    }
-  }
 }
 
 // ブラウザストレージのクリア
@@ -508,23 +502,6 @@ async function clearBrowserStorage() {
 
   } catch (e) {
     console.error('Error clearing browser storage:', e);
-  }
-}
-
-// Cookieのクリア
-function clearCookies() {
-  try {
-    const cookies = document.cookie.split(';');
-    cookies.forEach(cookie => {
-      const [name] = cookie.trim().split('=');
-      if (name) {
-        // 現在のドメインのCookieを削除
-        document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/;`;
-        document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; domain=${location.hostname};`;
-      }
-    });
-  } catch (e) {
-    console.error('Error clearing cookies:', e);
   }
 }
 

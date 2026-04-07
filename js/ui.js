@@ -39,10 +39,10 @@ function addDataSourceRow(source) {
   row.dataset.type = source.type;
 
   const inputHtml = source.type === 'url'
-    ? `<input type="text" value="${source.url || ''}" placeholder="TopoJSON URL" style="flex: 1;">`
+    ? `<input type="text" value="${escapeHtml(source.url || '')}" placeholder="TopoJSON URL" style="flex: 1;">`
     : source.type === 'file'
-      ? `<span class="file-name" title="${source.name}">${source.name}</span><input type="file" class="file-upload" accept=".txt,.json,.geojson" style="display:none;">`
-      : `<span class="kml-name">${source.name}</span>`;
+      ? `<span class="file-name" title="${escapeHtml(source.name || '')}">${escapeHtml(source.name || '')}</span><input type="file" class="file-upload" accept=".txt,.json,.geojson" style="display:none;">`
+      : `<span class="kml-name">${escapeHtml(source.name || '')}</span>`;
 
   row.innerHTML = `
     <button class="add">+</button>
@@ -75,6 +75,7 @@ function addDataSourceRow(source) {
     if (rows.length > 1) {
       const sourceId = row.dataset.id;
       removeLayer(sourceId);
+      fileContentStore.delete(sourceId);
       row.remove();
       updateRemoveButtons();
       saveState();
@@ -102,17 +103,9 @@ function addDataSourceRow(source) {
         fileName.textContent = file.name;
         fileName.title = file.name;
 
-        // ファイルをメモリに保存
-        row.dataset.file = JSON.stringify({
-          name: file.name,
-          size: file.size,
-          type: file.type,
-          lastModified: file.lastModified
-        });
-
-        // ファイルの内容を保存
+        // ファイルの内容をストアに保存（DOMではなくメモリ上）
         file.text().then(content => {
-          row.dataset.fileContent = content;
+          fileContentStore.set(fileId, content);
           // TXT形式の場合、テキスト解析と自動KML Mode処理
           if (file.name.endsWith('.txt')) {
             checkAndEnableKmlModeForTxt(content);
@@ -174,7 +167,7 @@ function getDataSources() {
     } else if (type === 'file') {
       const id = row.dataset.id;
       const name = row.querySelector('.file-name').textContent;
-      const fileContent = row.dataset.fileContent;
+      const fileContent = fileContentStore.get(id);
       return { type, id, name, fileContent, color };
     } else {
       const id = row.dataset.id;
@@ -216,26 +209,30 @@ async function searchAddress() {
 function createLabelIcon(name, fontSize) {
   return L.divIcon({
     className: 'address-label',
-    html: `<div style="font-size: ${fontSize}px;">${name}</div>`,
+    html: `<div style="font-size: ${fontSize}px;">${escapeHtml(name)}</div>`,
     iconSize: [null, null],
     iconAnchor: [0, 0]
   });
 }
 
-// 住所ラベルを表示
+// 住所ラベルを表示（レジストリに追加し、ビューポート内なら描画）
 function showAddressLabel(layer) {
   const layerId = L.Util.stamp(layer);
   const data = state.featureData.get(layerId);
   if (!data) return;
 
   const center = getFeatureLabelPosition(data.feature) || layer.getBounds().getCenter();
-  const fontSize = state.map.getZoom() / 1.3;
-  const labelMarker = L.marker(center, { icon: createLabelIcon(data.name, fontSize) }).addTo(state.map);
-  state.addressLabels.set(layerId, labelMarker);
-  updateLabelRotations();
+  state.labelRegistry.set(layerId, { center, name: data.name });
+
+  if (state.map.getBounds().pad(0.2).contains(center)) {
+    const fontSize = state.map.getZoom() / 1.3;
+    const labelMarker = L.marker(center, { icon: createLabelIcon(data.name, fontSize) }).addTo(state.map);
+    state.addressLabels.set(layerId, labelMarker);
+    updateLabelRotations();
+  }
 }
 
-// 住所ラベルを非表示
+// 住所ラベルを非表示（レジストリからも削除）
 function hideAddressLabel(layer) {
   const layerId = L.Util.stamp(layer);
   const labelMarker = state.addressLabels.get(layerId);
@@ -243,61 +240,73 @@ function hideAddressLabel(layer) {
     state.map.removeLayer(labelMarker);
     state.addressLabels.delete(layerId);
   }
+  state.labelRegistry.delete(layerId);
 }
 
 // 住所表示を切り替え
 function toggleAddressDisplay() {
   const showAddress = document.getElementById('showAddress').checked;
   const kmlMode = document.getElementById('kmlMode').checked;
-  const hideUnselected = document.getElementById('hideUnselected').checked;
 
-  // 既存のラベルをすべてクリア
+  // 既存のラベルとレジストリをクリア
   state.addressLabels.forEach(marker => state.map.removeLayer(marker));
   state.addressLabels.clear();
+  state.labelRegistry.clear();
 
   if (showAddress) {
-    const layersToShow = new Set();
-
     if (kmlMode) {
-      // KMLモードの場合は選択されたレイヤーのみ表示
+      // KMLモードの場合は選択されたレイヤーのみ登録
       state.selectedLayers.forEach(layer => {
-        if (state.featureData.get(L.Util.stamp(layer))) {
-          layersToShow.add(layer);
+        const layerId = L.Util.stamp(layer);
+        const data = state.featureData.get(layerId);
+        if (data) {
+          const center = getFeatureLabelPosition(data.feature) || layer.getBounds().getCenter();
+          state.labelRegistry.set(layerId, { center, name: data.name });
         }
       });
     } else {
-      // 通常モードの場合、すべてのフィーチャレイヤーを表示
-      state.featureData.forEach(data => {
+      // 通常モードの場合、すべてのフィーチャを登録
+      state.featureData.forEach((data, layerId) => {
         if (data.layer) {
-          layersToShow.add(data.layer);
+          const center = getFeatureLabelPosition(data.feature) || data.layer.getBounds().getCenter();
+          state.labelRegistry.set(layerId, { center, name: data.name });
         }
       });
     }
-
-    const baseFontSize = state.map.getZoom() / 1.3;
-    const labelsToAdd = [];
-
-    layersToShow.forEach(layer => {
-      const layerId = L.Util.stamp(layer);
-      const data = state.featureData.get(layerId);
-      if (!data) return;
-
-      const center = getFeatureLabelPosition(data.feature) || layer.getBounds().getCenter();
-      const labelMarker = L.marker(center, {
-        icon: createLabelIcon(data.name, baseFontSize)
-      });
-
-      labelsToAdd.push({ layerId, labelMarker, feature: data.feature, originalCenter: center });
-    });
-
-    labelsToAdd.forEach(({ layerId, labelMarker }) => {
-      state.map.addLayer(labelMarker);
-      state.addressLabels.set(layerId, labelMarker);
-    });
-    updateLabelRotations();
+    refreshVisibleLabels();
   }
 
   saveState();
+}
+
+// ビューポート内のラベルのみ描画（ビューポートカリング）
+function refreshVisibleLabels() {
+  if (state.isCtrlPressed) return;
+  if (!document.getElementById('showAddress')?.checked) return;
+  if (state.labelRegistry.size === 0) return;
+
+  const bounds = state.map.getBounds().pad(0.2);
+  const baseFontSize = state.map.getZoom() / 1.3;
+
+  // ビューポート外に出たラベルを削除
+  state.addressLabels.forEach((marker, layerId) => {
+    const entry = state.labelRegistry.get(layerId);
+    if (!entry || !bounds.contains(entry.center)) {
+      state.map.removeLayer(marker);
+      state.addressLabels.delete(layerId);
+    }
+  });
+
+  // ビューポート内に入ったラベルを追加
+  state.labelRegistry.forEach(({ center, name }, layerId) => {
+    if (!state.addressLabels.has(layerId) && bounds.contains(center)) {
+      const labelMarker = L.marker(center, { icon: createLabelIcon(name, baseFontSize) });
+      state.map.addLayer(labelMarker);
+      state.addressLabels.set(layerId, labelMarker);
+    }
+  });
+
+  updateLabelRotations();
 }
 
 // ホバー時の住所ラベルを表示
@@ -334,14 +343,17 @@ function updateLabelRotations() {
   // ズームレベルが低いほどオフセットを小さくする
   const dynamicVerticalOffset = Math.max(5, 20 - (18 - zoom) * 2);
 
-  labels.forEach((marker, index) => {
-    const div = marker.getElement()?.querySelector('div');
+  // layout thrashing防止: offsetHeight読み取りをまとめてから書き込む
+  // layerIdのパリティで上下を決定（イテレーション順ではなく安定したIDを使用）
+  const entries = [...state.addressLabels.entries()]; // [layerId, marker]
+  const divs = entries.map(([, marker]) => marker.getElement()?.querySelector('div'));
+  const heights = divs.map(div => div ? div.offsetHeight : 0);
+  divs.forEach((div, index) => {
     if (div) {
-      const labelHeight = div.offsetHeight;
-      const offset = dynamicVerticalOffset + (labelHeight / 20);
-
-      // 偶数番目のラベルは上に、奇数番目のラベルは下にずらす
-      const offsetY = (index % 2 === 0) ? -offset : offset;
+      const layerId = entries[index][0];
+      const offset = dynamicVerticalOffset + (heights[index] / 20);
+      // layerIdのパリティで上下を決定（パン中も変化しない）
+      const offsetY = (layerId % 2 === 0) ? -offset : offset;
       div.style.transform = `translate(0px, ${offsetY}px) translate(-50%, -50%)`;
       div.style.fontSize = `${baseFontSize}px`;
     }
@@ -362,31 +374,9 @@ function setupKeyEvents() {
         if (!state.isCtrlPressed) {
           state.isCtrlPressed = true;
           hideHoverAddressLabel();
-
-          // ラベルが多い場合はバッチ処理
-          if (state.addressLabels.size > 10) {
-            // 大量のラベルを効率的に処理
-            const labelsToHide = Array.from(state.addressLabels.entries());
-            labelsToHide.forEach(([layerId, labelMarker]) => {
-              state.hiddenAddressLabels.set(layerId, labelMarker);
-            });
-
-            // 一括でマップから削除
-            state.map.eachLayer((layer) => {
-              if (layer instanceof L.Marker && layer.options.icon?.options.className === 'address-label') {
-                state.map.removeLayer(layer);
-              }
-            });
-
-            state.addressLabels.clear();
-          } else {
-            // 少量のラベルは個別に処理
-            state.addressLabels.forEach((labelMarker, layerId) => {
-              state.map.removeLayer(labelMarker);
-              state.hiddenAddressLabels.set(layerId, labelMarker);
-            });
-            state.addressLabels.clear();
-          }
+          // 現在表示中のラベルをまとめて削除（レジストリは保持）
+          state.addressLabels.forEach(marker => state.map.removeLayer(marker));
+          state.addressLabels.clear();
         }
       }, 50); // 50msデバウンス
     }
@@ -406,31 +396,10 @@ function setupKeyEvents() {
           showHoverAddressLabel(state.currentHoverLayer);
         }
 
-        if (document.getElementById('showAddress').checked && state.hiddenAddressLabels.size > 0) {
-          // 表示するレイヤーを事前にフィルタリング
-          const layersToShow = [];
-          state.hiddenAddressLabels.forEach((labelMarker, layerId) => {
-            const layer = state.featureData.get(layerId)?.layer;
-            const data = state.featureData.get(layerId);
-
-            if (layer && (document.getElementById('showAddress').checked || state.selectedLayers.has(layer))) {
-              layersToShow.push({ layerId, labelMarker });
-            }
-          });
-
-          // バッチ処理でラベルを再表示
-          if (layersToShow.length > 0) {
-            layersToShow.forEach(({ layerId, labelMarker }) => {
-              state.map.addLayer(labelMarker);
-              state.addressLabels.set(layerId, labelMarker);
-            });
-            updateLabelRotations();
-          }
-        }
-
-        state.hiddenAddressLabels.clear();
+        // レジストリを元にビューポート内のラベルを再描画
+        refreshVisibleLabels();
       }
-    }, 10); // 50msデバウンス
+    }, 10);
   });
 }
 
@@ -443,20 +412,19 @@ function setupMapEvents() {
   state.map.on('zoomend', () => {
     if (zoomTimeout) clearTimeout(zoomTimeout);
     zoomTimeout = setTimeout(() => {
-      // ズーム変更時にキャッシュをクリア
       clearMemoCache();
-      updateLabelRotations();
+      refreshVisibleLabels(); // ビューポート内ラベルを再評価（updateLabelRotationsを含む）
       saveState();
-    }, 100); // 100msデバウンス
+    }, 100);
   });
 
-  // 移動イベント
+  // 移動イベント：パン後にビューポート外ラベルを削除、新規ラベルを追加
   state.map.on('moveend', () => {
     if (moveTimeout) clearTimeout(moveTimeout);
     moveTimeout = setTimeout(() => {
-      updateLabelRotations();
+      refreshVisibleLabels();
       saveState();
-    }, 100); // 100msデバウンス
+    }, 100);
   });
 }
 
@@ -514,62 +482,56 @@ function processAndSelectFeaturesFromFile(content, fileName) {
   let failureCount = 0;
   const failureLog = [];
 
-  // ファイル内の各行をフィーチャーと照合
+  // フィーチャ名の正規化済みルックアップMapを事前構築（O(n) → O(1)検索）
+  const featureNameMap = new Map();
+  state.featureData.forEach((data) => {
+    if (!data || !data.layer) return;
+    const key = normalizeText(data.name);
+    if (!featureNameMap.has(key)) featureNameMap.set(key, []);
+    featureNameMap.get(key).push(data);
+  });
+
+  // ファイル内の各行をフィーチャーと照合（O(lines) のみ）
   for (const line of lines) {
     const normalizedLine = normalizeText(line);
-    let matched = false;
+    const matches = featureNameMap.get(normalizedLine);
 
-    // state.featureDataを走査してフィーチャーをマッチング
-    for (const [layerId, data] of state.featureData) {
-      if (!data || !data.layer) continue;
-
-      const normalizedFeatureName = normalizeText(data.name);
-
-      // 完全一致をチェック
-      if (normalizedFeatureName === normalizedLine) {
-        // フィーチャーを選択
+    if (matches && matches.length > 0) {
+      matches.forEach(data => {
         if (!state.selectedLayers.has(data.layer)) {
-          toggleSelect(data.layer, false);
+          toggleSelect(data.layer, false, true); // 可視性更新をスキップ
         }
-        successCount++;
-        matched = true;
-        break;
-      }
-    }
-
-    if (!matched) {
+      });
+      successCount++;
+    } else {
       failureCount++;
       failureLog.push(`Not found: "${line}"`);
     }
   }
 
-  // KML Modeを有効化（自動選択したため）
+  // KML Modeを有効化（自動選択したため）& バッチ選択後に一括で可視性を更新
   const kmlModeCheckbox = document.getElementById('kmlMode');
   if (kmlModeCheckbox && !kmlModeCheckbox.checked) {
     kmlModeCheckbox.checked = true;
     kmlModeCheckbox.dispatchEvent(new Event('change', { bubbles: true }));
+  } else if (kmlModeCheckbox?.checked && document.getElementById('hideUnselected')?.checked) {
+    updateLayerVisibility();
   }
 
-  // アラートメッセージを作成
-  let alertMessage = '=== Feature Selection Result ===\n\n';
-  alertMessage += `Total lines: ${lines.length}\n`;
-  alertMessage += `✓ Success: ${successCount}\n`;
-  alertMessage += `✗ Failed: ${failureCount}\n`;
-
+  // 結果をコンソールに出力
+  const resultSummary = `Feature Selection: ${successCount}/${lines.length} matched` +
+    (failureCount > 0 ? ` (${failureCount} not found)` : '');
+  console.log('=== Feature Selection Result ===');
+  console.log(`Total: ${lines.length}, Success: ${successCount}, Failed: ${failureCount}`);
   if (failureLog.length > 0) {
-    alertMessage += '\n--- Failure Log ---\n';
-    failureLog.forEach(log => {
-      alertMessage += `${log}\n`;
-    });
+    console.log('--- Failures ---');
+    failureLog.forEach(log => console.log(log));
   }
 
-  alertMessage += '\n====================================';
-
-  // アラートで結果を表示
-  alert(alertMessage);
-
-  // コンソールにも出力
-  console.log(alertMessage);
+  // 結果をページ内メッセージで表示（ブロッキングalertの代わり）
+  const isPartialFailure = failureCount > 0 && successCount > 0;
+  const isAllFailed = successCount === 0 && failureCount > 0;
+  showMessage(resultSummary, isAllFailed, isPartialFailure ? 8000 : 5000);
 
   // 状態を保存
   saveState();
