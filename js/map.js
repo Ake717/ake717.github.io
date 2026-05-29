@@ -519,6 +519,7 @@ function ensureHatchPattern() {
   rect.setAttribute('height', '10');
   rect.setAttribute('transform', 'translate(0,0)');
   rect.setAttribute('fill', '#888888');
+  rect.setAttribute('opacity', '0.4');
 
   pattern.appendChild(rect);
   defs.appendChild(pattern);
