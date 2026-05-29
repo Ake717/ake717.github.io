@@ -65,7 +65,7 @@ function saveState() {
     const stateData = {
       // fileContentはサイズが大きすぎるためlocalStorageには保存しない
       sources: getDataSources().map(s =>
-        s.type === 'file' ? { type: s.type, id: s.id, name: s.name, color: s.color } : s
+        s.type === 'file' ? { type: s.type, id: s.id, name: s.name, strokeColor: s.strokeColor, strokeOpacity: s.strokeOpacity, fillColor: s.fillColor, fillOpacity: s.fillOpacity } : s
       ),
       selectedFeatures: Array.from(state.persistedSelectedFeatures),
       mapView: {
@@ -163,7 +163,7 @@ function initMap() {
       zoomControl: true,
       zoomSnap: 0.1,
       zoomDelta: 0.25,
-      preferCanvas: true,
+      preferCanvas: false,
       center: INITIAL_VIEW.center,
       zoom: INITIAL_VIEW.zoom
     };
@@ -213,20 +213,58 @@ function recreateMap() {
   }
 }
 
-// レイヤーの色を更新
-function updateLayerColor(sourceId, newColor) {
+// レイヤーの色と透明度を更新（後方互換）
+function updateLayerColor(sourceId, newColor, newOpacity) {
   const layerGroup = state.layers.get(sourceId);
   if (layerGroup) {
-    layerGroup.setStyle({ color: newColor });
+    layerGroup.setStyle({ color: newColor, opacity: newOpacity });
   }
   const useHatch = document.getElementById('hatchUnselected')?.checked;
-  // featureDataの色を更新し、非選択レイヤーのfillColorも即時反映
+  // featureDataの色・透明度を更新し、非選択レイヤーのfillColorも即時反映
   state.featureData.forEach(data => {
     if (data.sourceId === sourceId) {
       data.color = newColor;
+      data.strokeColor = newColor;
+      data.fillColor = newColor;
+      if (newOpacity !== undefined) {
+        data.opacity = newOpacity;
+        data.strokeOpacity = newOpacity;
+        data.fillOpacity = newOpacity;
+      }
       if (!state.selectedLayers.has(data.layer)) {
         data.layer.setStyle({
-          fillColor: useHatch ? '#888888' : newColor
+          color: newColor,
+          opacity: newOpacity !== undefined ? newOpacity : (data.strokeOpacity || 0.7),
+          fillColor: useHatch ? 'url(#hatch-pattern)' : (data.fillColor || newColor),
+          fillOpacity: useHatch ? 1 : (data.fillOpacity || 0.15)
+        });
+      }
+    }
+  });
+}
+
+// レイヤーの枠線・内部スタイルを個別に更新
+function updateLayerStyle(sourceId, style) {
+  const layerGroup = state.layers.get(sourceId);
+  if (layerGroup) {
+    layerGroup.setStyle({
+      color: style.strokeColor,
+      opacity: style.strokeOpacity
+    });
+  }
+  const useHatch = document.getElementById('hatchUnselected')?.checked;
+  state.featureData.forEach(data => {
+    if (data.sourceId === sourceId) {
+      data.strokeColor = style.strokeColor;
+      data.strokeOpacity = style.strokeOpacity;
+      data.fillColor = style.fillColor;
+      data.fillOpacity = style.fillOpacity;
+      if (!state.selectedLayers.has(data.layer)) {
+        data.layer.setStyle({
+          color: style.strokeColor,
+          opacity: style.strokeOpacity,
+          fillColor: useHatch ? 'url(#hatch-pattern)' : style.fillColor,
+          fillOpacity: useHatch ? 1 : style.fillOpacity
         });
       }
     }
@@ -300,6 +338,11 @@ function setupFeatureEvents(feature, layer, source) {
     feature,
     layer,
     color: source.color,
+    opacity: source.opacity !== undefined ? source.opacity : 0.7,
+    strokeColor: source.strokeColor || source.color || '#3388ff',
+    strokeOpacity: source.strokeOpacity !== undefined ? source.strokeOpacity : (source.opacity !== undefined ? source.opacity : 0.7),
+    fillColor: source.fillColor || source.color || '#3388ff',
+    fillOpacity: source.fillOpacity !== undefined ? source.fillOpacity : 0.15,
     name,
     featureId,
     isKml: source.isKml,
@@ -322,7 +365,7 @@ function setupFeatureEvents(feature, layer, source) {
     }
     if (!state.selectedLayers.has(layer)) {
       const layerData = state.featureData.get(layerId);
-      layer.setStyle({ fillColor: layerData?.color || '#3388ff', fillOpacity: 0.4 });
+      layer.setStyle({ fillColor: layerData?.fillColor || '#3388ff', fillOpacity: 0.4 });
     }
   }, 80));
 
@@ -333,8 +376,10 @@ function setupFeatureEvents(feature, layer, source) {
       const layerData = state.featureData.get(layerId);
       const useHatch = document.getElementById('hatchUnselected')?.checked;
       layer.setStyle({
-        fillColor: useHatch ? '#888888' : (layerData?.color || '#3388ff'),
-        fillOpacity: useHatch ? 0.05 : 0.15
+        color: layerData?.strokeColor || '#3388ff',
+        opacity: layerData?.strokeOpacity || 0.7,
+        fillColor: useHatch ? 'url(#hatch-pattern)' : (layerData?.fillColor || '#3388ff'),
+        fillOpacity: useHatch ? 1 : (layerData?.fillOpacity || 0.15)
       });
     }
   }, 80));
@@ -364,9 +409,10 @@ function toggleSelect(layer, shouldSave = true, skipVisibilityUpdate = false) {
     state.selectedLayers.delete(layer);
     layer.setStyle({
       weight: data.isKml ? 2 : 1,
-      opacity: 0.7,
-      fillColor: useHatch ? '#888888' : data.color,
-      fillOpacity: useHatch ? 0.05 : 0.15
+      color: data.strokeColor || data.color || '#3388ff',
+      opacity: data.strokeOpacity !== undefined ? data.strokeOpacity : (data.opacity || 0.7),
+      fillColor: useHatch ? 'url(#hatch-pattern)' : (data.fillColor || data.color || '#3388ff'),
+      fillOpacity: useHatch ? 1 : (data.fillOpacity || 0.15)
     });
     if (kmlMode && showAddress) {
       hideAddressLabel(layer);
@@ -380,7 +426,7 @@ function toggleSelect(layer, shouldSave = true, skipVisibilityUpdate = false) {
     layer.setStyle({
       weight: 3,
       opacity: 1.0,
-      fillColor: data.color,
+      fillColor: data.fillColor || data.color || '#3388ff',
       fillOpacity: 0
     });
     if (showAddress && kmlMode) {
@@ -424,13 +470,14 @@ function updateLayerVisibility() {
         // 表示: 隠れているレイヤーのみスタイル復元
         if (layer._isHidden) {
           if (isSelected) {
-            layer.setStyle({ weight: 3, opacity: 1.0, fillColor: data?.color, fillOpacity: 0 });
+            layer.setStyle({ weight: 3, opacity: 1.0, fillColor: data?.fillColor || data?.color || '#3388ff', fillOpacity: 0 });
           } else {
             layer.setStyle({
               weight: data?.isKml ? 2 : 1,
-              opacity: 0.7,
-              fillColor: useHatch ? '#888888' : data?.color,
-              fillOpacity: useHatch ? 0.05 : 0.15
+              color: data?.strokeColor || data?.color || '#3388ff',
+              opacity: data?.strokeOpacity !== undefined ? data.strokeOpacity : (data?.opacity || 0.7),
+              fillColor: useHatch ? 'url(#hatch-pattern)' : (data?.fillColor || data?.color || '#3388ff'),
+              fillOpacity: useHatch ? 1 : (data?.fillOpacity || 0.15)
             });
           }
           layer.options.interactive = true;
@@ -448,11 +495,44 @@ function updateLayerVisibility() {
   });
 }
 
+// SVGハッチパターンを確保する
+function ensureHatchPattern() {
+  const mapPane = document.getElementById('map');
+  if (!mapPane) return false;
+
+  // LeafletのSVGオーバーレイを探す
+  const svg = mapPane.querySelector('.leaflet-overlay-pane svg') || mapPane.querySelector('svg');
+  if (!svg) return false;
+
+  if (svg.getElementById('hatch-pattern')) return true;
+
+  const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+  const pattern = document.createElementNS('http://www.w3.org/2000/svg', 'pattern');
+  pattern.setAttribute('id', 'hatch-pattern');
+  pattern.setAttribute('patternUnits', 'userSpaceOnUse');
+  pattern.setAttribute('width', '10');
+  pattern.setAttribute('height', '10');
+  pattern.setAttribute('patternTransform', 'rotate(45)');
+
+  const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  rect.setAttribute('width', '4');
+  rect.setAttribute('height', '10');
+  rect.setAttribute('transform', 'translate(0,0)');
+  rect.setAttribute('fill', '#888888');
+
+  pattern.appendChild(rect);
+  defs.appendChild(pattern);
+  svg.prepend(defs);
+
+  return true;
+}
+
 // ハッチングスタイルをすべての未選択レイヤーに適用/解除する（ビューポート内のみ優先更新）
 function updateHatchStyles() {
   const useHatch = document.getElementById('hatchUnselected')?.checked;
   const bounds = state.map?.getBounds().pad(0.5);
   requestAnimationFrame(() => {
+    ensureHatchPattern();
     state.featureData.forEach((data) => {
       if (!state.selectedLayers.has(data.layer)) {
         // ビューポート外のレイヤーはスキップ（getBounds未対応のレイヤーは常に更新）
@@ -460,8 +540,8 @@ function updateHatchStyles() {
           if (bounds && data.layer.getBounds && !bounds.intersects(data.layer.getBounds())) return;
         } catch (_) { /* getBoundsが使えない場合は更新を続行 */ }
         data.layer.setStyle({
-          fillColor: useHatch ? '#888888' : data.color,
-          fillOpacity: useHatch ? 0.05 : 0.15
+          fillColor: useHatch ? 'url(#hatch-pattern)' : (data.fillColor || data.color || '#3388ff'),
+          fillOpacity: useHatch ? 1 : (data.fillOpacity || 0.15)
         });
       }
     });

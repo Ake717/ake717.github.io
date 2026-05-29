@@ -44,12 +44,18 @@ async function loadAllDataSources() {
     if (!existingSourceMap.has(key)) {
       // 新規データソース
       let newSource = null;
+      const style = {
+        strokeColor: data.strokeColor,
+        strokeOpacity: data.strokeOpacity,
+        fillColor: data.fillColor,
+        fillOpacity: data.fillOpacity
+      };
       if (data.type === 'url' && data.url) {
-        newSource = createUrlSource(data.url, data.color);
+        newSource = createUrlSource(data.url, style);
       } else if (data.type === 'file' && data.id && data.fileContent) {
-        newSource = createFileSourceFromContent(data.fileContent, data.name, data.color, data.id);
+        newSource = createFileSourceFromContent(data.fileContent, data.name, data.id, style);
       } else if (data.type === 'kml' && data.id) {
-        newSource = createKmlSource(data.id, data.name, data.color);
+        newSource = createKmlSource(data.id, data.name, style);
       }
       
       if (newSource) {
@@ -67,9 +73,9 @@ async function loadAllDataSources() {
     try {
       const geoJson = await source.load();
       const layerGroup = await addGeoJsonInChunks(geoJson, {
-        style: { color: source.color, weight: source.isKml ? 2 : 1, opacity: 0.7, fillOpacity: 0.15 },
+        style: { color: source.strokeColor, weight: source.isKml ? 2 : 1, opacity: source.strokeOpacity, fillColor: source.fillColor, fillOpacity: source.fillOpacity },
         onEachFeature: (feature, layer) => setupFeatureEvents(feature, layer, source),
-        renderer: L.canvas({ padding: document.getElementById('alwaysShowFeatures')?.checked ? 1.0 : 0.1 })
+        renderer: L.svg({ padding: document.getElementById('alwaysShowFeatures')?.checked ? 1.0 : 0.1 })
       });
       state.layers.set(source.id, layerGroup);
 
@@ -182,7 +188,7 @@ async function loadKmlSourceDirectly(source) {
 
     // GeoJSONをチャンク単位でマップに追加
     const layerGroup = await addGeoJsonInChunks(geoJson, {
-      style: { color: source.color, weight: source.isKml ? 2 : 1, opacity: 0.7, fillOpacity: 0.15 },
+      style: { color: source.strokeColor, weight: source.isKml ? 2 : 1, opacity: source.strokeOpacity, fillColor: source.fillColor, fillOpacity: source.fillOpacity },
       onEachFeature: (feature, layer) => setupFeatureEvents(feature, layer, source),
       renderer: L.svg({ padding: document.getElementById('alwaysShowFeatures')?.checked ? 1.0 : 0.1 })
     });

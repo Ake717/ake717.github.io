@@ -1,23 +1,30 @@
 /**
  * URLデータソースを作成します
  * @param {string} url - データソースのURL
- * @param {string} color - レイヤーの色
+ * @param {Object} style - スタイル設定 { strokeColor, strokeOpacity, fillColor, fillOpacity }
  * @returns {Object} URLデータソースオブジェクト
  */
-function createUrlSource(url, color) {
+function createUrlSource(url, style) {
   if (!url || typeof url !== 'string') {
     throw new Error('Invalid URL provided');
   }
 
-  if (!color || typeof color !== 'string') {
-    throw new Error('Invalid color provided');
-  }
+  const s = style || {};
+  const strokeColor = s.strokeColor || s.color || '#3388ff';
+  const strokeOpacity = s.strokeOpacity !== undefined ? s.strokeOpacity : (s.opacity !== undefined ? s.opacity : 0.7);
+  const fillColor = s.fillColor || s.color || '#3388ff';
+  const fillOpacity = s.fillOpacity !== undefined ? s.fillOpacity : 0.15;
 
   return {
     type: 'url',
     id: url,
     url,
-    color,
+    color: strokeColor,
+    opacity: strokeOpacity,
+    strokeColor,
+    strokeOpacity,
+    fillColor,
+    fillOpacity,
     isKml: false,
     get name() { return this.url; },
     async load() {
@@ -54,12 +61,23 @@ function createUrlSource(url, color) {
 }
 
 // ファイルデータソースを作成
-function createFileSource(file, color) {
+function createFileSource(file, style) {
+  const s = style || {};
+  const strokeColor = s.strokeColor || s.color || '#3388ff';
+  const strokeOpacity = s.strokeOpacity !== undefined ? s.strokeOpacity : (s.opacity !== undefined ? s.opacity : 0.7);
+  const fillColor = s.fillColor || s.color || '#3388ff';
+  const fillOpacity = s.fillOpacity !== undefined ? s.fillOpacity : 0.15;
+
   return {
     type: 'file',
     id: `${file.name}_${file.lastModified}`,
     file,
-    color,
+    color: strokeColor,
+    opacity: strokeOpacity,
+    strokeColor,
+    strokeOpacity,
+    fillColor,
+    fillOpacity,
     isKml: false,
     get name() { return this.file.name; },
     async load() {
@@ -86,13 +104,24 @@ function createFileSource(file, color) {
 }
 
 // ファイル内容からデータソースを作成
-function createFileSourceFromContent(content, fileName, color, id) {
+function createFileSourceFromContent(content, fileName, id, style) {
+  const s = style || {};
+  const strokeColor = s.strokeColor || s.color || '#3388ff';
+  const strokeOpacity = s.strokeOpacity !== undefined ? s.strokeOpacity : (s.opacity !== undefined ? s.opacity : 0.7);
+  const fillColor = s.fillColor || s.color || '#3388ff';
+  const fillOpacity = s.fillOpacity !== undefined ? s.fillOpacity : 0.15;
+
   return {
     type: 'file',
     id,
     fileName,
     content,
-    color,
+    color: strokeColor,
+    opacity: strokeOpacity,
+    strokeColor,
+    strokeOpacity,
+    fillColor,
+    fillOpacity,
     isKml: false,
     get name() { return this.fileName; },
     async load() {
@@ -225,12 +254,18 @@ async function loadKmlFromFile(file) {
         const geoJson = parseKmlToGeoJson(kmlText);
         const id = `kml_${file.name}_${file.lastModified}`;
         const color = randomColor();
+        const style = {
+          strokeColor: color,
+          strokeOpacity: 0.7,
+          fillColor: color,
+          fillOpacity: 0.15
+        };
         const name = file.name;
 
         // KMLデータをキャッシュに保存
         try {
           const kmlCache = JSON.parse(localStorage.getItem('kmlCache')) || {};
-          kmlCache[id] = { geoJson, color, name };
+          kmlCache[id] = { geoJson, style, name };
           localStorage.setItem('kmlCache', JSON.stringify(kmlCache));
         } catch (storageError) {
           if (storageError.name === 'QuotaExceededError') {
@@ -240,7 +275,7 @@ async function loadKmlFromFile(file) {
           }
         }
 
-        resolve(createKmlSource(id, name, color));
+        resolve(createKmlSource(id, name, style));
       } catch (error) {
         console.error('KML parse error:', error);
         showMessage(`KMLファイルの読み込みに失敗しました: ${error.message}`, true);
@@ -253,18 +288,35 @@ async function loadKmlFromFile(file) {
 }
 
 // KMLデータソースを作成
-function createKmlSource(id, name, color) {
+function createKmlSource(id, name, style) {
+  const s = style || {};
+  const strokeColor = s.strokeColor || s.color || '#3388ff';
+  const strokeOpacity = s.strokeOpacity !== undefined ? s.strokeOpacity : (s.opacity !== undefined ? s.opacity : 0.7);
+  const fillColor = s.fillColor || s.color || '#3388ff';
+  const fillOpacity = s.fillOpacity !== undefined ? s.fillOpacity : 0.15;
+
   return {
     type: 'kml',
     id,
     name,
-    color,
+    color: strokeColor,
+    opacity: strokeOpacity,
+    strokeColor,
+    strokeOpacity,
+    fillColor,
+    fillOpacity,
     isKml: true,
     async load() {
       const kmlCache = JSON.parse(localStorage.getItem('kmlCache')) || {};
       const cachedData = kmlCache[this.id];
       if (cachedData) {
-        this.color = cachedData.color; // キャッシュの色を反映
+        const cachedStyle = cachedData.style || {};
+        this.color = cachedStyle.strokeColor || cachedStyle.color || cachedData.color || this.color;
+        this.opacity = cachedStyle.strokeOpacity !== undefined ? cachedStyle.strokeOpacity : (cachedData.opacity !== undefined ? cachedData.opacity : this.opacity);
+        this.strokeColor = cachedStyle.strokeColor || this.strokeColor;
+        this.strokeOpacity = cachedStyle.strokeOpacity !== undefined ? cachedStyle.strokeOpacity : this.strokeOpacity;
+        this.fillColor = cachedStyle.fillColor || this.fillColor;
+        this.fillOpacity = cachedStyle.fillOpacity !== undefined ? cachedStyle.fillOpacity : this.fillOpacity;
         return cachedData.geoJson;
       }
       throw new Error(`KML data with id "${this.id}" not found in cache.`);

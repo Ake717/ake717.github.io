@@ -44,10 +44,24 @@ function addDataSourceRow(source) {
       ? `<span class="file-name" title="${escapeHtml(source.name || '')}">${escapeHtml(source.name || '')}</span><input type="file" class="file-upload" accept=".txt,.json,.geojson" style="display:none;">`
       : `<span class="kml-name">${escapeHtml(source.name || '')}</span>`;
 
+  const strokeColor = source.strokeColor || source.color || randomColor();
+  const strokeOpacity = source.strokeOpacity !== undefined ? source.strokeOpacity : (source.opacity !== undefined ? source.opacity : 0.7);
+  const fillColor = source.fillColor || source.color || randomColor();
+  const fillOpacity = source.fillOpacity !== undefined ? source.fillOpacity : 0.15;
+
   row.innerHTML = `
     <button class="add">+</button>
     ${inputHtml}
-    <input type="color" value="${source.color || randomColor()}">
+    <div class="color-picker-group">
+      <div class="picker-wrap">
+        <button class="pickr-trigger stroke-trigger" title="枠線" style="background:${strokeColor};opacity:${strokeOpacity};" data-color="${strokeColor}" data-opacity="${strokeOpacity}"></button>
+        <span class="pickr-label">線</span>
+      </div>
+      <div class="picker-wrap">
+        <button class="pickr-trigger fill-trigger" title="内部" style="background:${fillColor};opacity:${fillOpacity};" data-color="${fillColor}" data-opacity="${fillOpacity}"></button>
+        <span class="pickr-label">塗</span>
+      </div>
+    </div>
     <button class="remove">-</button>
   `;
 
@@ -120,19 +134,64 @@ function addDataSourceRow(source) {
     });
   }
 
-  const colorInput = row.querySelector('input[type="color"]');
-  const debouncedUpdate = debounce((id, color) => {
+  const strokeTrigger = row.querySelector('.stroke-trigger');
+  const fillTrigger = row.querySelector('.fill-trigger');
+
+  const debouncedUpdateStyle = debounce((id, style) => {
     if (id) {
-      updateLayerColor(id, color);
+      updateLayerStyle(id, style);
     }
   }, 100);
 
-  colorInput.addEventListener('input', (e) => {
-    const newColor = e.target.value;
-    const sourceId = row.dataset.id;
-    debouncedUpdate(sourceId, newColor);
+  let currentStyle = {
+    strokeColor,
+    strokeOpacity,
+    fillColor,
+    fillOpacity
+  };
+
+  const createPickr = (trigger, defaultColor, onChange) => {
+    return Pickr.create({
+      el: trigger,
+      theme: 'classic',
+      default: defaultColor,
+      defaultRepresentation: 'HEXA',
+      components: {
+        preview: true,
+        opacity: true,
+        hue: true,
+        interaction: {
+          hex: true,
+          rgba: true,
+          input: true,
+          save: true
+        }
+      }
+    }).on('change', (color) => {
+      const rgba = color.toRGBA();
+      const hex = color.toHEXA().toString();
+      const opacity = rgba[3];
+      trigger.style.background = hex;
+      trigger.style.opacity = opacity;
+      trigger.dataset.color = hex;
+      trigger.dataset.opacity = opacity;
+      onChange(hex, opacity);
+    }).on('save', () => {
+      saveState();
+    });
+  };
+
+  createPickr(strokeTrigger, strokeColor, (hex, opacity) => {
+    currentStyle.strokeColor = hex;
+    currentStyle.strokeOpacity = opacity;
+    debouncedUpdateStyle(row.dataset.id, { ...currentStyle });
   });
-  colorInput.addEventListener('change', saveState);
+
+  createPickr(fillTrigger, fillColor, (hex, opacity) => {
+    currentStyle.fillColor = hex;
+    currentStyle.fillOpacity = opacity;
+    debouncedUpdateStyle(row.dataset.id, { ...currentStyle });
+  });
 
   document.getElementById('data-sources').appendChild(row);
   updateRemoveButtons();
@@ -160,19 +219,24 @@ function updateRemoveButtons() {
 function getDataSources() {
   return Array.from(document.getElementById('data-sources').querySelectorAll('.data-source-row')).map(row => {
     const type = row.dataset.type;
-    const color = row.querySelector('input[type="color"]').value;
+    const strokeTrigger = row.querySelector('.stroke-trigger');
+    const fillTrigger = row.querySelector('.fill-trigger');
+    const strokeColor = strokeTrigger?.dataset.color || '#3388ff';
+    const strokeOpacity = parseFloat(strokeTrigger?.dataset.opacity || 0.7);
+    const fillColor = fillTrigger?.dataset.color || '#3388ff';
+    const fillOpacity = parseFloat(fillTrigger?.dataset.opacity || 0.15);
     if (type === 'url') {
       const url = row.querySelector('input[type="text"]').value.trim();
-      return { type, id: url, url, color };
+      return { type, id: url, url, strokeColor, strokeOpacity, fillColor, fillOpacity };
     } else if (type === 'file') {
       const id = row.dataset.id;
       const name = row.querySelector('.file-name').textContent;
       const fileContent = fileContentStore.get(id);
-      return { type, id, name, fileContent, color };
+      return { type, id, name, fileContent, strokeColor, strokeOpacity, fillColor, fillOpacity };
     } else {
       const id = row.dataset.id;
       const name = row.querySelector('.kml-name').textContent;
-      return { type, id, name, color };
+      return { type, id, name, strokeColor, strokeOpacity, fillColor, fillOpacity };
     }
   }).filter(s => s.id);
 }
